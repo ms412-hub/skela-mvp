@@ -32,6 +32,10 @@ const LINES: [number, number][] = [
 ]
 
 type Pt = { id: number; name: string; x: number; y: number }
+type Tool = 'move' | 'add' | 'link'
+const CUSTOM_MIN = 100 // 추가 관절 id는 100부터 (기본 13개는 MediaPipe id)
+const hasLine = (a: number, b: number, links: [number, number][]) =>
+  [...LINES, ...links].some(([x, y]) => (x === a && y === b) || (x === b && y === a))
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -45,6 +49,8 @@ export default function App() {
   const [pts, setPts] = useState<Pt[] | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
   const [mode, setMode] = useState<'edit' | 'rig'>('edit')
+  const [links, setLinks] = useState<[number, number][]>([]) // 사용자가 만든 추가 연결
+  const [tool, setTool] = useState<Tool>('move')
 
   function drawBase() {
     const canvas = canvasRef.current!
@@ -73,17 +79,28 @@ export default function App() {
       ctx.stroke()
     }
 
+    ctx.strokeStyle = 'rgba(76, 201, 240, 0.9)'
+    for (const [a, b] of links) {
+      const pa = byId.get(a)
+      const pb = byId.get(b)
+      if (!pa || !pb) continue
+      ctx.beginPath()
+      ctx.moveTo(pa.x, pa.y)
+      ctx.lineTo(pb.x, pb.y)
+      ctx.stroke()
+    }
+
     for (const p of pts) {
       const isSel = p.id === selected
       ctx.beginPath()
       ctx.arc(p.x, p.y, isSel ? 9 : 6, 0, Math.PI * 2)
-      ctx.fillStyle = isSel ? '#ffd23f' : '#3ddc84'
+      ctx.fillStyle = isSel ? '#ffd23f' : p.id >= CUSTOM_MIN ? '#4cc9f0' : '#3ddc84'
       ctx.fill()
       ctx.lineWidth = 2
       ctx.strokeStyle = '#000'
       ctx.stroke()
     }
-  }, [pts, selected])
+  }, [pts, selected, links])
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -101,6 +118,8 @@ export default function App() {
       setHasImage(true)
       setPts(null)
       setSelected(null)
+      setLinks([])
+      setTool('move')
       setMode('edit')
       originalRef.current = null
       setStatus('')
@@ -143,6 +162,7 @@ export default function App() {
       }))
       originalRef.current = found.map((p) => ({ ...p }))
       setPts(found)
+      setLinks([])
       setSelected(null)
       setStatus('✅ 점을 드래그해서 몸에 맞게 고쳐보세요')
     } catch (err) {
@@ -165,6 +185,22 @@ export default function App() {
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!pts) return
     const { x, y, ratio } = toCanvas(e)
+    if (tool === 'add') {
+      const id = Math.max(CUSTOM_MIN - 1, ...pts.map((p) => p.id)) + 1
+      const canvas = canvasRef.current!
+      const np: Pt = {
+        id,
+        name: `추가 관절 ${id - CUSTOM_MIN + 1}`,
+        x: Math.min(Math.max(x, 0), canvas.width),
+        y: Math.min(Math.max(y, 0), canvas.height),
+      }
+      setPts([...pts, np])
+      // 선택돼 있던 관절이 있으면 자동으로 연결
+      if (selected !== null && !hasLine(selected, id, links)) setLinks([...links, [selected, id]])
+      setSelected(id)
+      setStatus(`${np.name} 추가됨 (이전 선택 관절과 자동 연결)`)
+      return
+    }
     const radius = 20 * ratio
     let best: Pt | null = null
     let bestDist = radius
@@ -174,6 +210,27 @@ export default function App() {
         best = p
         bestDist = d
       }
+    }
+    if (best && tool === 'link') {
+      if (selected === null || selected === best.id) {
+        setSelected(best.id)
+        setStatus(`연결 시작: ${best.name} → 연결할 다른 점을 클릭`)
+      } else {
+        const a = selected
+        const b = best.id
+        const isBase = LINES.some(([p, q]) => (p === a && q === b) || (p === b && q === a))
+        if (isBase) {
+          setStatus('기본 연결선은 해제할 수 없어요')
+        } else if (hasLine(a, b, links)) {
+          setLinks(links.filter(([p, q]) => !((p === a && q === b) || (p === b && q === a))))
+          setStatus('연결 해제됨')
+        } else {
+          setLinks([...links, [a, b]])
+          setStatus('연결됨')
+        }
+        setSelected(null)
+      }
+      return
     }
     if (best) {
       dragIdRef.current = best.id
@@ -204,17 +261,31 @@ export default function App() {
 
   function resetPoints() {
     if (!originalRef.current) return
-    setPts(originalRef.current.map((p) => ({ ...p })))
+    // 기본 13개 관절만 되돌리고, 추가한 관절·연결은 유지
+    setPts([...originalRef.current.map((p) => ({ ...p })), ...pts!.filter((p) => p.id >= CUSTOM_MIN)])
     setSelected(null)
-    setStatus('원래 추정값으로 되돌렸어요')
+    setStatus('원래 추정값으로 되돌렸어요 (추가 관절은 유지)')
   }
 
   function clearPoints() {
     setPts(null)
     setSelected(null)
+    setLinks([])
+    setTool('move')
     setMode('edit')
     originalRef.current = null
     setStatus('')
+  }
+
+  function deleteSelected() {
+    if (selected === null || selected < CUSTOM_MIN || !pts) {
+      setStatus('추가한 관절만 삭제할 수 있어요 (기본 13개는 IK에 필요해 삭제 불가)')
+      return
+    }
+    setPts(pts.filter((p) => p.id !== selected))
+    setLinks(links.filter(([a, b]) => a !== selected && b !== selected))
+    setSelected(null)
+    setStatus('관절 삭제됨 (연결선도 함께 삭제)')
   }
 
   return (
@@ -241,7 +312,9 @@ export default function App() {
             width={canvasRef.current.width}
             height={canvasRef.current.height}
             pts={pts}
+            links={links}
             onPtsLoad={setPts}
+            onLinksLoad={setLinks}
           />
         )}
       </main>
@@ -259,6 +332,15 @@ export default function App() {
         </button>
         <button className="btn ghost" onClick={clearPoints} disabled={!pts}>
           점 지우기
+        </button>
+        <button className={tool === 'add' ? 'btn' : 'btn ghost'} onClick={() => setTool(tool === 'add' ? 'move' : 'add')} disabled={!pts}>
+          {tool === 'add' ? '관절 추가 중 (클릭)' : '+ 관절 추가'}
+        </button>
+        <button className={tool === 'link' ? 'btn' : 'btn ghost'} onClick={() => { setTool(tool === 'link' ? 'move' : 'link'); setSelected(null) }} disabled={!pts}>
+          {tool === 'link' ? '연결 중 (점 2개 클릭)' : '연결 설정'}
+        </button>
+        <button className="btn ghost" onClick={deleteSelected} disabled={!pts || selected === null || selected < CUSTOM_MIN}>
+          선택 관절 삭제
         </button>
         <button
           className="btn"

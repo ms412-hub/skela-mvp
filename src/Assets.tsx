@@ -18,6 +18,7 @@ export type AssetItem = {
   flip: boolean
   front: boolean
   bgTol: number // 흰 배경 제거 강도 (0이면 사용 안 함)
+  poly?: { x: number; y: number }[] // 이미지에서 오려낸 파츠의 원본 영역 (이미지 좌표)
 }
 
 // 소품을 붙일 수 있는 위치
@@ -29,6 +30,7 @@ export const ANCHORS = [
   { key: 'head', label: '머리', chain: '' },
   { key: 'chest', label: '가슴 (어깨 중앙)', chain: '' },
   { key: 'waist', label: '허리 (골반 중앙)', chain: '' },
+  { key: 'free', label: '고정 (캔버스 중앙 기준)', chain: '' },
 ] as const
 
 const toRad = (d: number) => (d * Math.PI) / 180
@@ -110,6 +112,8 @@ function anchorInfo(
   pts: PtLike[],
   posed: Posed[],
   angles: Record<string, number>,
+  W: number,
+  H: number,
 ): { x: number; y: number; rot: number } | null {
   const get = (id: number) => pts.find((p) => p.id === id)
   const def = ANCHORS.find((a) => a.key === anchor)
@@ -121,6 +125,7 @@ function anchorInfo(
     const rot = (angles[def.chain + '_up'] ?? 0) + (angles[def.chain + '_lo'] ?? 0)
     return { x: ch.e.x, y: ch.e.y, rot }
   }
+  if (anchor === 'free') return { x: W / 2, y: H / 2, rot: 0 }
   if (anchor === 'head') {
     const n = get(0)
     return n ? { x: n.x, y: n.y, rot: 0 } : null
@@ -315,7 +320,7 @@ export function AssetLayer({
   return (
     <>
       {assets.map((a) => {
-        const info = anchorInfo(a.anchor, pts, posed, angles)
+        const info = anchorInfo(a.anchor, pts, posed, angles, W, H)
         if (!info) return null
         return (
           <AssetMesh

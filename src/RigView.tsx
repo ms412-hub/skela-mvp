@@ -12,7 +12,9 @@ type Props = {
   width: number
   height: number
   pts: Pt[]
+  links: [number, number][]
   onPtsLoad: (pts: Pt[]) => void
+  onLinksLoad: (links: [number, number][]) => void
 }
 
 type Chain = {
@@ -84,7 +86,7 @@ function tracePath(ctx: CanvasRenderingContext2D, poly: P[], ox = 0, oy = 0) {
 }
 
 // 원본에서 poly 영역만 오려낸 조각
-function cutPart(img: HTMLImageElement, W: number, H: number, poly: P[]) {
+function cutPart(img: CanvasImageSource, W: number, H: number, poly: P[]) {
   const xs = poly.map((q) => q.x)
   const ys = poly.map((q) => q.y)
   const x0 = Math.max(0, Math.floor(Math.min(...xs)))
@@ -107,6 +109,26 @@ function cutPart(img: HTMLImageElement, W: number, H: number, poly: P[]) {
   return { canvas, bw, bh, cx: x0 + bw / 2, cy: y0 + bh / 2 }
 }
 
+// 원본에서 사용자가 오려낸 파츠 영역을 배경색으로 지운 이미지 (중복 노출 방지)
+function eraseParts(img: HTMLImageElement, W: number, H: number, polys: P[][]) {
+  const c = document.createElement('canvas')
+  c.width = W
+  c.height = H
+  const ctx = c.getContext('2d')!
+  ctx.drawImage(img, 0, 0, W, H)
+  const [r, g, b] = ctx.getImageData(2, 2, 1, 1).data
+  const bg = `rgb(${r},${g},${b})`
+  ctx.fillStyle = bg
+  ctx.strokeStyle = bg
+  ctx.lineWidth = 4
+  for (const poly of polys) {
+    tracePath(ctx, poly)
+    ctx.fill()
+    ctx.stroke()
+  }
+  return { canvas: c, bg }
+}
+
 function buildRig(
   img: HTMLImageElement,
   W: number,
@@ -114,7 +136,10 @@ function buildRig(
   pts: Pt[],
   armHW: number,
   legHW: number,
+  partPolys: P[][] = [],
 ) {
+  const erased = eraseParts(img, W, H, partPolys)
+  const srcImg = erased.canvas
   const get = (id: number) => pts.find((p) => p.id === id)!
   // 이미지 좌표(y 아래로) → Three 좌표(y 위로, 중앙이 원점)
   const w2 = (p: P) => ({ x: p.x - W / 2, y: H / 2 - p.y })
@@ -123,9 +148,8 @@ function buildRig(
   base.width = W
   base.height = H
   const bctx = base.getContext('2d')!
-  bctx.drawImage(img, 0, 0, W, H)
-  const [r, g, b] = bctx.getImageData(2, 2, 1, 1).data
-  const bg = `rgb(${r},${g},${b})`
+  bctx.drawImage(srcImg, 0, 0, W, H)
+  const bg = erased.bg
 
   // 오려낸 자리를 배경색으로 덮기 (경계선까지)
   const erase = (poly: P[]) => {
@@ -146,8 +170,8 @@ function buildRig(
 
     const upPoly = segmentPoly(a, m, hw, hw * 0.6) // 관절 쪽을 살짝 겹치게
     const loPoly = segmentPoly(m, e, hw, ext)
-    const up = cutPart(img, W, H, upPoly)
-    const lo = cutPart(img, W, H, loPoly)
+    const up = cutPart(srcImg, W, H, upPoly)
+    const lo = cutPart(srcImg, W, H, loPoly)
     erase(upPoly)
     erase(loPoly)
 
@@ -165,7 +189,7 @@ function buildRig(
     }
   })
 
-  return { base, bg, limbs }
+  return { base, bg, limbs, src: srcImg }
 }
 
 function mkTex(c: HTMLCanvasElement) {
@@ -195,8 +219,59 @@ function posedChains(pts: Pt[], W: number, H: number, angles: Record<string, num
   })
 }
 
+// 모든 관절의 현재 위치(이미지 좌표). 추가 관절은 연결된 가장 가까운 기본 관절의 이동량만큼 따라감
+function posedPoints(
+  pts: Pt[],
+  links: [number, number][],
+  W: number,
+  H: number,
+  angles: Record<string, number>,
+) {
+  const rest = new Map(pts.map((p) => [p.id, { x: p.x, y: p.y }]))
+  const cur = new Map(rest)
+  const disp = new Map<number, P>()
+  for (const ch of posedChains(pts, W, H, angles)) {
+    for (const [i, q] of [[1, ch.m], [2, ch.e]] as const) {
+      const id = CHAINS.find((c) => c.key === ch.key)!.ids[i]
+      const r = rest.get(id)!
+      cur.set(id, q)
+      disp.set(id, { x: q.x - r.x, y: q.y - r.y })
+    }
+  }
+  const isBase = (id: number) => id < 100
+  for (const p of pts) {
+    if (isBase(p.id)) continue
+    // 연결을 따라 가장 가까운 기본 관절 찾기 (BFS)
+    const seen = new Set([p.id])
+    const queue = [p.id]
+    let base: number | null = null
+    while (queue.length && base === null) {
+      const id = queue.shift()!
+      for (const [a, b] of links) {
+        const o = a === id ? b : b === id ? a : null
+        if (o === null || seen.has(o)) continue
+        seen.add(o)
+        if (isBase(o)) {
+          base = o
+          break
+        }
+        queue.push(o)
+      }
+    }
+    const d = base !== null ? disp.get(base) : undefined
+    if (d) cur.set(p.id, { x: p.x + d.x, y: p.y + d.y })
+  }
+  return cur
+}
+
 // AI에게 줄 뼈대 가이드 이미지
-function renderGuide(pts: Pt[], W: number, H: number, angles: Record<string, number>) {
+function renderGuide(
+  pts: Pt[],
+  W: number,
+  H: number,
+  angles: Record<string, number>,
+  links: [number, number][] = [],
+) {
   const c = document.createElement('canvas')
   c.width = W
   c.height = H
@@ -251,6 +326,19 @@ function renderGuide(pts: Pt[], W: number, H: number, angles: Record<string, num
     dot(ch.a, '#222')
     dot(ch.m, '#222')
     dot(ch.e, '#222')
+  }
+
+  // 사용자가 추가한 관절과 연결선
+  if (links.length || pts.some((p) => p.id >= 100)) {
+    const cur = posedPoints(pts, links, W, H, angles)
+    for (const [a, b] of links) {
+      const pa = cur.get(a)
+      const pb = cur.get(b)
+      if (pa && pb) line(pa, pb, '#7a3cff')
+    }
+    for (const p of pts) {
+      if (p.id >= 100) dot(cur.get(p.id)!, '#4cc9f0')
+    }
   }
   return c
 }
@@ -323,12 +411,14 @@ function GuideEditor({
   H,
   angles,
   setAngles,
+  links,
 }: {
   pts: Pt[]
   W: number
   H: number
   angles: Record<string, number>
   setAngles: AngleSetter
+  links: [number, number][]
 }) {
   const ref = useRef<HTMLCanvasElement>(null)
   const drag = useRef<{ key: string; part: 'mid' | 'end'; sign: number } | null>(null)
@@ -341,7 +431,7 @@ function GuideEditor({
     c.width = W
     c.height = H
     const ctx = c.getContext('2d')!
-    ctx.drawImage(renderGuide(pts, W, H, angles), 0, 0)
+    ctx.drawImage(renderGuide(pts, W, H, angles, links), 0, 0)
     const rad = Math.max(10, W / 60)
     for (const ch of posed) {
       for (const part of ['mid', 'end'] as const) {
@@ -356,7 +446,7 @@ function GuideEditor({
         ctx.stroke()
       }
     }
-  }, [pts, W, H, angles, posed, active])
+  }, [pts, W, H, angles, posed, active, links])
 
   function toCanvas(e: React.PointerEvent<HTMLCanvasElement>) {
     const c = ref.current!
@@ -467,15 +557,105 @@ function FitCamera({ w, h }: { w: number; h: number }) {
   return null
 }
 
+/* ───────────── 이미지 영역(올가미) 선택 ───────────── */
+
+function PartSelectOverlay({
+  glEl,
+  W,
+  H,
+  onDone,
+}: {
+  glEl: React.RefObject<HTMLCanvasElement | null>
+  W: number
+  H: number
+  onDone: (poly: P[]) => void
+}) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  const path = useRef<P[]>([])
+  const down = useRef(false)
+
+  // 화면 좌표 → 이미지 좌표 (FitCamera와 같은 배율 계산)
+  function toImg(e: React.PointerEvent<HTMLCanvasElement>): P | null {
+    if (!glEl.current) return null
+    const r = glEl.current.getBoundingClientRect()
+    const zoom = Math.min(r.width / W, r.height / H)
+    return {
+      x: (e.clientX - r.left - r.width / 2) / zoom + W / 2,
+      y: (e.clientY - r.top - r.height / 2) / zoom + H / 2,
+    }
+  }
+
+  function redraw() {
+    const c = ref.current
+    if (!c || !glEl.current) return
+    const r = glEl.current.getBoundingClientRect()
+    if (c.width !== Math.round(r.width) || c.height !== Math.round(r.height)) {
+      c.width = Math.round(r.width) // 창 크기가 바뀌어도 오버레이 크기를 맞춤
+      c.height = Math.round(r.height)
+    }
+    const ctx = c.getContext('2d')!
+    ctx.clearRect(0, 0, c.width, c.height)
+    const zoom = Math.min(r.width / W, r.height / H)
+    const sx = (p: P) => (p.x - W / 2) * zoom + r.width / 2
+    const sy = (p: P) => (p.y - H / 2) * zoom + r.height / 2
+    const pts = path.current
+    if (!pts.length) return
+    ctx.beginPath()
+    pts.forEach((p, i) => (i ? ctx.lineTo(sx(p), sy(p)) : ctx.moveTo(sx(p), sy(p))))
+    ctx.closePath()
+    ctx.fillStyle = 'rgba(255, 210, 63, 0.25)'
+    ctx.fill()
+    ctx.setLineDash([6, 4])
+    ctx.lineWidth = 2
+    ctx.strokeStyle = '#ffd23f'
+    ctx.stroke()
+  }
+
+  return (
+    <canvas
+      ref={ref}
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: 'crosshair', touchAction: 'none' }}
+      onPointerDown={(e) => {
+        const q = toImg(e)
+        if (!q) return // 그림 화면이 아직 준비되지 않음
+        down.current = true
+        path.current = [q]
+        e.currentTarget.setPointerCapture(e.pointerId)
+        redraw()
+      }}
+      onPointerMove={(e) => {
+        if (!down.current) return
+        const q = toImg(e)
+        if (q) path.current.push(q)
+        redraw()
+      }}
+      onPointerUp={(e) => {
+        if (!down.current) return
+        down.current = false
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+        const poly = path.current.map((p) => ({
+          x: Math.min(Math.max(p.x, 0), W),
+          y: Math.min(Math.max(p.y, 0), H),
+        }))
+        path.current = []
+        redraw()
+        onDone(poly)
+      }}
+    />
+  )
+}
+
 /* ───────────── 메인 화면 ───────────── */
 
-export default function RigView({ img, width, height, pts, onPtsLoad }: Props) {
+export default function RigView({ img, width, height, pts, links, onPtsLoad, onLinksLoad }: Props) {
   const [armHW, setArmHW] = useState(30)
   const [legHW, setLegHW] = useState(40)
   const [angles, setAngles] = useState<Record<string, number>>({})
   const [assets, setAssets] = useState<AssetItem[]>([])
   const [selAsset, setSelAsset] = useState<number | null>(null)
   const glEl = useRef<HTMLCanvasElement | null>(null)
+  const [selectMode, setSelectMode] = useState(false) // 이미지 영역(파츠) 선택 모드
+  const [partMsg, setPartMsg] = useState('')
 
    // Gemini API 연동 State 및 함수
   const [apiKey, setApiKey] = useState<string>(getApiKey())
@@ -505,7 +685,7 @@ export default function RigView({ img, width, height, pts, onPtsLoad }: Props) {
       const octx = origCanvas.getContext('2d')!
       octx.drawImage(img, 0, 0, width, height)
 
-      const guideCanvas = renderGuide(pts, width, height, angles)
+      const guideCanvas = renderGuide(pts, width, height, angles, links)
 
       const resultText = await generateInpaintWithGemini(
         currentKey,
@@ -530,21 +710,60 @@ export default function RigView({ img, width, height, pts, onPtsLoad }: Props) {
     [pts, width, height, angles],
   )
 
+  // 오려낸 파츠의 원본 영역 (소품을 움직일 때마다 리그가 다시 만들어지지 않도록 문자열 키 사용)
+  const polyKey = JSON.stringify(assets.filter((a) => a.poly).map((a) => a.poly))
   const rig = useMemo(
-    () => buildRig(img, width, height, pts, armHW, legHW),
-    [img, width, height, pts, armHW, legHW],
+    () => buildRig(img, width, height, pts, armHW, legHW, JSON.parse(polyKey) as P[][]),
+    [img, width, height, pts, armHW, legHW, polyKey],
   )
   const baseTex = useMemo(() => mkTex(rig.base), [rig])
 
   const guideUrl = useMemo(
-    () => renderGuide(pts, width, height, angles).toDataURL('image/png'),
-    [pts, width, height, angles],
+    () => renderGuide(pts, width, height, angles, links).toDataURL('image/png'),
+    [pts, width, height, angles, links],
   )
 
   const setAngle = (k: string, v: number) => setAngles((prev) => ({ ...prev, [k]: v }))
 
   function updateAsset(id: number, p: Partial<AssetItem>) {
     setAssets((prev) => prev.map((a) => (a.id === id ? { ...a, ...p } : a)))
+  }
+
+  // 오려낸 영역으로 파츠(=움직일 수 있는 소품) 만들기
+  function makePart(poly: P[], canvas: HTMLCanvasElement, cx: number, cy: number, name: string): AssetItem {
+    return {
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      name,
+      orig: canvas,
+      anchor: 'free',
+      scale: 1,
+      offX: Math.round(cx - width / 2),
+      offY: Math.round(height / 2 - cy),
+      rot: 0,
+      flip: false,
+      front: true,
+      bgTol: 0,
+      poly,
+    }
+  }
+
+  function addPartFromPoly(poly: P[]) {
+    const area = Math.abs(
+      poly.reduce((s, q, i) => {
+        const n = poly[(i + 1) % poly.length]
+        return s + (q.x * n.y - n.x * q.y)
+      }, 0) / 2,
+    )
+    if (poly.length < 3 || area < 100) {
+      setPartMsg('영역이 너무 작아요. 파츠 둘레를 따라 크게 그려주세요.')
+      return
+    }
+    const c = cutPart(rig.src, width, height, poly) // 이미 오려낸 파츠가 있으면 그 자리는 제외된 이미지
+    const item = makePart(poly, c.canvas, c.cx, c.cy, `파츠 ${assets.filter((a) => a.poly).length + 1}`)
+    setAssets((prev) => [...prev, item])
+    setSelAsset(item.id)
+    setSelectMode(false)
+    setPartMsg('✅ 파츠 생성됨 — 본체를 끌어 이동 / 초록 점 회전 / 노란 점 크기. 삭제하면 원래 자리로 복원돼요.')
   }
 
   function saveScreen() {
@@ -555,7 +774,7 @@ export default function RigView({ img, width, height, pts, onPtsLoad }: Props) {
 
   function savePose() {
     const data = {
-      version: 1,
+      version: 2,
       canvas: { w: width, h: height },
       points: pts.map((p) => ({
         id: p.id,
@@ -563,6 +782,19 @@ export default function RigView({ img, width, height, pts, onPtsLoad }: Props) {
         x: Math.round(p.x * 10) / 10,
         y: Math.round(p.y * 10) / 10,
       })),
+      links,
+      parts: assets
+        .filter((a) => a.poly)
+        .map((a) => ({
+          name: a.name,
+          poly: a.poly,
+          scale: a.scale,
+          offX: a.offX,
+          offY: a.offY,
+          rot: a.rot,
+          flip: a.flip,
+          front: a.front,
+        })),
       armHW,
       legHW,
       angles,
@@ -597,8 +829,36 @@ export default function RigView({ img, width, height, pts, onPtsLoad }: Props) {
         alert(
           `이미지 크기가 달라요.\n저장: ${d.canvas.w}×${d.canvas.h}\n현재: ${width}×${height}\n같은 이미지를 올린 뒤 불러와 주세요.`,
         )
+      } else if (![0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28].every((id) => d.points.some((q: Pt) => q.id === id))) {
+        alert('기본 관절(13개)이 빠진 포즈 파일이에요.')
       } else {
+        const ids = new Set<number>(d.points.map((q: Pt) => q.id))
         onPtsLoad(d.points)
+        onLinksLoad(
+          Array.isArray(d.links)
+            ? d.links.filter((l: [number, number]) => ids.has(l[0]) && ids.has(l[1]))
+            : [],
+        )
+        // 저장된 파츠 복원: 앞에서 오려낸 영역을 지운 이미지에서 차례로 다시 오림
+        const saved: { name: string; poly: P[]; scale: number; offX: number; offY: number; rot: number; flip: boolean; front: boolean }[] =
+          Array.isArray(d.parts) ? d.parts : []
+        const restored: AssetItem[] = []
+        saved.forEach((sp, i) => {
+          const srcC = eraseParts(img, width, height, saved.slice(0, i).map((q) => q.poly)).canvas
+          const c = cutPart(srcC, width, height, sp.poly)
+          restored.push({
+            ...makePart(sp.poly, c.canvas, c.cx, c.cy, sp.name),
+            id: Date.now() + i,
+            scale: sp.scale,
+            offX: sp.offX,
+            offY: sp.offY,
+            rot: sp.rot,
+            flip: sp.flip,
+            front: sp.front,
+          })
+        })
+        setAssets((prev) => [...prev.filter((a) => !a.poly), ...restored])
+        setSelAsset(null)
         setAngles(d.angles ?? {})
         setArmHW(d.armHW ?? 30)
         setLegHW(d.legHW ?? 40)
@@ -652,6 +912,14 @@ export default function RigView({ img, width, height, pts, onPtsLoad }: Props) {
               onChange={updateAsset}
             />
           </Canvas>
+          {selectMode && (
+            <PartSelectOverlay
+              glEl={glEl}
+              W={width}
+              H={height}
+              onDone={addPartFromPoly}
+            />
+          )}
         </div>
       </div>
 
@@ -663,6 +931,7 @@ export default function RigView({ img, width, height, pts, onPtsLoad }: Props) {
           H={height}
           angles={angles}
           setAngles={setAngles}
+          links={links}
         />
 
 
@@ -734,6 +1003,15 @@ export default function RigView({ img, width, height, pts, onPtsLoad }: Props) {
         <button className="btn ghost" onClick={saveScreen}>
           합성 화면 저장 (PNG)
         </button>
+
+        <div className="panel-title">이미지 파츠 직접 조작</div>
+        <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.5 }}>
+          버튼을 누른 뒤 왼쪽 그림에서 파츠 둘레를 따라 드래그(올가미)하세요. 놓으면 그 영역이 파츠가 됩니다.
+        </div>
+        <button className={selectMode ? 'btn' : 'btn ghost'} onClick={() => setSelectMode(!selectMode)}>
+          {selectMode ? '선택 중… (취소하려면 다시 클릭)' : '✂ 이미지 영역 선택'}
+        </button>
+        {partMsg && <span style={{ fontSize: 11, color: '#3ddc84' }}>{partMsg}</span>}
 
         <AssetPanel
           assets={assets}
