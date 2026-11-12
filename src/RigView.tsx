@@ -5,7 +5,7 @@ import type { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import { AssetLayer, AssetPanel } from './Assets'
 import type { AssetItem } from './Assets'
-import { buildSkin, deformSkin } from './meshSkin'
+import { buildSkin, deformSkin, makeBody, makeLimits, constrainShift, fitToLimit, STRETCH_LIMIT } from './meshSkin'
 import type { DeformStats } from './meshSkin'
 
 type Pt = { id: number; name: string; x: number; y: number }
@@ -567,6 +567,7 @@ type MeshBackend = {
     out: Float32Array,
     outIndex: Uint32Array,
   ) => DeformStats & { drawCount: number }
+  project?: (prev: Record<string, number>, cand: Record<string, number>, pin?: string) => Record<string, number>
 }
 type MeshStats = DeformStats & { ms: number }
 
@@ -596,7 +597,7 @@ function DeformMesh({
     const ms = performance.now() - t0
     idx.needsUpdate = true
     geom.setDrawRange(0, r.drawCount)
-    onStats({ folds: r.folds, maxStretch: r.maxStretch, hidden: r.hidden, ms })
+    onStats({ folds: r.folds, maxStretch: r.maxStretch, overLimit: r.overLimit, ms })
     pos.needsUpdate = true
     geom.computeBoundingSphere()
   }, [geom, backend, angles, onStats])
@@ -614,12 +615,14 @@ function JointHandles({
   H,
   angles,
   setAngles,
+  project,
 }: {
   pts: Pt[]
   W: number
   H: number
   angles: Record<string, number>
   setAngles: AngleSetter
+  project?: MeshBackend['project']
 }) {
   const { camera, gl } = useThree()
   const anglesRef = useRef(angles)
@@ -660,24 +663,29 @@ function JointHandles({
     setActive(id)
     const r1 = (v: number) => Math.round(v * 10) / 10
 
+    let cur = { ...anglesRef.current } // 마지막으로 허용된 자세
     const move = (ev: PointerEvent) => {
       const q = toWorld(ev.clientX, ev.clientY)
       const t = { x: q.x + off.x, y: q.y + off.y }
+      const cand = { ...cur }
       if (part === 0) {
-        setAngles((prev) => ({ ...prev, [ch.key + '_dx']: r1(t.x - r.a.x), [ch.key + '_dy']: r1(t.y - r.a.y) }))
-        return
-      }
-      const dx = anglesRef.current[ch.key + '_dx'] ?? 0
-      const dy = anglesRef.current[ch.key + '_dy'] ?? 0
-      const rel = { x: t.x - dx, y: t.y - dy } // 어깨 이동분을 뺀 기준 좌표
-      if (part === 2) {
-        const res = solveIK(r, rel, anglesRef.current[ch.key + '_up'] ?? 0, sign)
-        sign = res.sign
-        setAngles((prev) => ({ ...prev, [ch.key + '_up']: r1(res.up), [ch.key + '_lo']: r1(res.lo) }))
+        cand[ch.key + '_dx'] = r1(t.x - r.a.x)
+        cand[ch.key + '_dy'] = r1(t.y - r.a.y)
       } else {
-        const up = norm(deg(Math.atan2(rel.y - r.a.y, rel.x - r.a.x) - r.th1))
-        setAngles((prev) => ({ ...prev, [ch.key + '_up']: r1(up) }))
+        const dx = cur[ch.key + '_dx'] ?? 0
+        const dy = cur[ch.key + '_dy'] ?? 0
+        const rel = { x: t.x - dx, y: t.y - dy } // 어깨 이동분을 뺀 기준 좌표
+        if (part === 2) {
+          const res = solveIK(r, rel, cur[ch.key + '_up'] ?? 0, sign)
+          sign = res.sign
+          cand[ch.key + '_up'] = r1(res.up)
+          cand[ch.key + '_lo'] = r1(res.lo)
+        } else {
+          cand[ch.key + '_up'] = r1(norm(deg(Math.atan2(rel.y - r.a.y, rel.x - r.a.x) - r.th1)))
+        }
       }
+      cur = project ? project(cur, cand, ch.key) : cand
+      setAngles(cur)
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -824,7 +832,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
   const glEl = useRef<HTMLCanvasElement | null>(null)
   const [selectMode, setSelectMode] = useState(false) // 이미지 영역(파츠) 선택 모드
   const [meshMode, setMeshMode] = useState(false) // 메시 변형 모드 (이미지가 관절을 따라 휨)
-  const [stats, setStats] = useState<MeshStats>({ folds: 0, maxStretch: 1, hidden: 0, ms: 0 })
+  const [stats, setStats] = useState<MeshStats>({ folds: 0, maxStretch: 1, overLimit: 0, ms: 0 })
   const [partMsg, setPartMsg] = useState('')
 
    // Gemini API 연동 State 및 함수
@@ -902,8 +910,22 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
       ext: ch.kind === 'arm' ? HAND_EXTEND : FOOT_EXTEND,
     }))
     // 다른 스키닝 방식(예: src/experimental/meshSkinMulti.ts)은 같은 MeshBackend 모양으로 여기에 연결할 수 있음
-    const sk = buildSkin(chains, width, height)
-    return { rest: sk.rest, uv: sk.uv, index: sk.index, deform: (a, o, i) => deformSkin(sk, a, o, i) }
+    const body = makeBody((id) => w2(get(id)))
+    const sk = buildSkin(chains, width, height, 12, body)
+    const lim = makeLimits((id) => w2(get(id)))
+    return {
+      rest: sk.rest,
+      uv: sk.uv,
+      index: sk.index,
+      deform: (a, o, i) => deformSkin(sk, a, o, i),
+      // 조작 중 자세 제한: 어깨·골반 이동 범위 + 늘어남 한도(STRETCH_LIMIT)를 넘지 않는 가장 가까운 자세로 되돌림
+      project: (prev, cand, pin) => {
+        const scratch = new Float32Array(sk.rest.length)
+        const idx = new Uint32Array(sk.index.length)
+        const c = constrainShift(chains, lim, cand, pin)
+        return fitToLimit((a) => deformSkin(sk, a, scratch, idx).maxStretch <= STRETCH_LIMIT, prev, c)
+      },
+    }
   }, [meshMode, pts, width, height, armHW, legHW])
   const meshTex = useMemo(() => (meshMode ? mkTex(rig.src) : null), [meshMode, rig])
 
@@ -1078,7 +1100,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
             {meshMode && backend && meshTex ? (
               <>
                 <DeformMesh backend={backend} tex={meshTex} angles={angles} onStats={setStats} />
-                <JointHandles pts={pts} W={width} H={height} angles={angles} setAngles={setAngles} />
+                <JointHandles pts={pts} W={width} H={height} angles={angles} setAngles={setAngles} project={backend.project} />
               </>
             ) : (
               <mesh>
@@ -1130,7 +1152,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
           <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.5 }}>
             노란 점=어깨/골반(통째 이동) · 흰 점=팔꿈치/무릎(굽히기) · 색 점=손목/발목(IK). 영향 범위는 아래 팔/다리 폭 슬라이더.
             <br />
-            뒤집힌 삼각형 {stats.folds}개 · 최대 늘어남 ×{stats.maxStretch.toFixed(2)} · 숨긴 삼각형 {stats.hidden}개 · {stats.ms.toFixed(1)}ms
+            뒤집힌 삼각형 {stats.folds}개 · 최대 늘어남 ×{stats.maxStretch.toFixed(2)} · 한도 초과 삼각형 {stats.overLimit}개 · {stats.ms.toFixed(1)}ms
           </div>
         )}
         <div className="panel-title">자세 잡기 (손목·발목·팔꿈치·무릎 점을 끌어보세요)</div>

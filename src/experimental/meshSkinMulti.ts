@@ -8,7 +8,7 @@
 // 좌표계·회전 규약은 meshSkin.ts와 동일 (Three 세계 좌표, y 위, 각도 양수 = 반시계)
 
 import type { RestChain, V2, DeformStats } from '../meshSkin'
-import { CUT_STRETCH } from '../meshSkin'
+import { STRETCH_LIMIT } from '../meshSkin'
 
 export type StaticBone = { a: V2; b: V2 }
 
@@ -172,7 +172,7 @@ export function deformSkinMulti(
   }
 
   let folds = 0
-  let hidden = 0
+  let overLimit = 0
   let drawCount = 0
   let maxStretch = 1
   const W1 = nx + 1
@@ -183,26 +183,16 @@ export function deformSkinMulti(
     return Math.hypot(out[b * 3] - out[a * 3], out[b * 3 + 1] - out[a * 3 + 1]) / r
   }
   const tri = (a: number, b: number, c: number) => {
-    if (!(moved[a] || moved[b] || moved[c])) {
-      if (outIndex) {
-        outIndex[drawCount++] = a
-        outIndex[drawCount++] = b
-        outIndex[drawCount++] = c
-      }
-      return
-    }
-    const st = Math.max(ratio(a, b), ratio(b, c), ratio(c, a))
-    if (st > CUT_STRETCH) {
-      hidden++
-      return
-    }
-    if (st > maxStretch) maxStretch = st
-    if (area(a, b, c, out) * area(a, b, c, rest) <= 0) folds++
     if (outIndex) {
       outIndex[drawCount++] = a
       outIndex[drawCount++] = b
       outIndex[drawCount++] = c
     }
+    if (!(moved[a] || moved[b] || moved[c])) return
+    const st = Math.max(ratio(a, b), ratio(b, c), ratio(c, a))
+    if (st > maxStretch) maxStretch = st
+    if (st > STRETCH_LIMIT) overLimit++
+    if (area(a, b, c, out) * area(a, b, c, rest) <= 0) folds++
   }
   for (let j = 0; j < ny; j++) {
     for (let i = 0; i < nx; i++) {
@@ -214,5 +204,5 @@ export function deformSkinMulti(
       tri(b, c, d)
     }
   }
-  return { folds, maxStretch, hidden, drawCount }
+  return { folds, maxStretch, overLimit, drawCount }
 }

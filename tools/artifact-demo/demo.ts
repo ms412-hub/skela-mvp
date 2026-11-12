@@ -1,8 +1,8 @@
 // Skela 메시 변형 체험 페이지의 로직. 앱의 src/meshSkin.ts, src/experimental/meshSkinMulti.ts를 그대로 사용한다.
 import * as THREE from 'three'
-import { buildSkin, deformSkin } from '../../src/meshSkin'
-import type { DeformStats, RestChain } from '../../src/meshSkin'
-import { buildSkinMulti, deformSkinMulti } from '../../src/experimental/meshSkinMulti'
+import { buildSkin, deformSkin, makeBody, makeLimits, constrainShift, fitToLimit, STRETCH_LIMIT } from '../../src/meshSkin'
+import type { RestChain } from '../../src/meshSkin'
+import { buildSkin as buildLegacy, deformSkin as deformLegacy } from './legacy/meshSkinLegacy'
 
 type P = { x: number; y: number }
 type Data = Record<string, { w: number; h: number; img: string; points: { id: number; x: number; y: number }[] }>
@@ -26,11 +26,12 @@ type Backend = {
   rest: Float32Array
   uv: Float32Array
   index: Uint32Array
-  deform: (a: Angles, o: Float32Array, i: Uint32Array) => DeformStats & { drawCount: number }
+  deform: (a: Angles, o: Float32Array, i: Uint32Array) => { folds: number; maxStretch: number; over: number; drawCount: number }
+  project?: (prev: Angles, cand: Angles, pin?: string) => Angles
 }
 
 let who = 'girl'
-let algo: 'basic' | 'multi' = 'basic'
+let algo: 'fixed' | 'legacy' = 'fixed'
 let angles: Angles = {}
 let showMesh = false
 let W = 0
@@ -119,25 +120,26 @@ function chainsRest(): RestChain[] {
 }
 function makeBackend(): Backend {
   const chains = chainsRest()
-  if (algo === 'multi') {
-    const lerp = (a: P, b: P, t: number) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })
-    const sh = lerp(w2(rest[11]), w2(rest[12]), 0.5)
-    const hp = lerp(w2(rest[23]), w2(rest[24]), 0.5)
-    const nose = w2(rest[0])
-    const sk = buildSkinMulti(
-      chains,
-      [
-        { a: lerp(sh, hp, 0.15), b: lerp(sh, hp, 0.85) },
-        { a: lerp(sh, nose, 0.3), b: lerp(sh, nose, 1.4) },
-        { a: lerp(w2(rest[23]), w2(rest[24]), 0.3), b: lerp(w2(rest[23]), w2(rest[24]), 0.7) },
-      ],
-      W,
-      H,
-    )
-    return { rest: sk.rest, uv: sk.uv, index: sk.index, deform: (a, o, i) => deformSkinMulti(sk, a, o, i) }
+  if (algo === 'legacy') {
+    // 수정 전: 머리·몸통 보호 없음, 4배 넘게 늘어난 삼각형은 숨김
+    const sk = buildLegacy(chains, W, H)
+    return {
+      rest: sk.rest, uv: sk.uv, index: sk.index,
+      deform: (a, o, i) => { const r = deformLegacy(sk, a, o, i); return { folds: r.folds, maxStretch: r.maxStretch, over: r.hidden, drawCount: r.drawCount } },
+    }
   }
-  const sk = buildSkin(chains, W, H)
-  return { rest: sk.rest, uv: sk.uv, index: sk.index, deform: (a, o, i) => deformSkin(sk, a, o, i) }
+  const body = makeBody((id) => w2(rest[id]))
+  const sk = buildSkin(chains, W, H, 12, body)
+  const lim = makeLimits((id) => w2(rest[id]))
+  return {
+    project: (prev, cand, pin) => {
+      const scratch = new Float32Array(sk.rest.length)
+      const idx = new Uint32Array(sk.index.length)
+      return fitToLimit((a) => deformSkin(sk, a, scratch, idx).maxStretch <= STRETCH_LIMIT, prev, constrainShift(chains, lim, cand, pin))
+    },
+    rest: sk.rest, uv: sk.uv, index: sk.index,
+    deform: (a, o, i) => { const r = deformSkin(sk, a, o, i); return { folds: r.folds, maxStretch: r.maxStretch, over: r.overLimit, drawCount: r.drawCount } },
+  }
 }
 function rebuild() {
   backend = makeBackend()
@@ -193,7 +195,8 @@ function update() {
   drawOverlay()
   $('s-folds').textContent = String(r.folds)
   $('s-stretch').textContent = '×' + fmt(r.maxStretch, 2)
-  $('s-hidden').textContent = String(r.hidden)
+  $('s-hidden').textContent = String(r.over)
+  $('l-hidden').textContent = algo === 'legacy' ? '숨긴 삼각형' : '한도(×' + STRETCH_LIMIT + ') 넘게 늘어난 삼각형'
   $('s-ms').textContent = fmt(ms, 1) + ' ms'
 }
 function drawOverlay() {
@@ -276,20 +279,22 @@ ov.addEventListener('pointermove', (e) => {
   const t = { x: q.x + active.offX, y: q.y + active.offY }
   const ch = CHAINS.find((c) => c.key === active!.key)!
   const r = chainRest(ch.ids)
+  const cand = { ...angles }
   if (active.part === 0) {
-    angles[ch.key + '_dx'] = r1(t.x - r.a.x)
-    angles[ch.key + '_dy'] = r1(t.y - r.a.y)
+    cand[ch.key + '_dx'] = r1(t.x - r.a.x)
+    cand[ch.key + '_dy'] = r1(t.y - r.a.y)
   } else {
     const rel = { x: t.x - (angles[ch.key + '_dx'] ?? 0), y: t.y - (angles[ch.key + '_dy'] ?? 0) }
     if (active.part === 2) {
       const res = solveIK(r, rel, angles[ch.key + '_up'] ?? 0, active.sign)
       active.sign = res.sign
-      angles[ch.key + '_up'] = r1(res.up)
-      angles[ch.key + '_lo'] = r1(res.lo)
+      cand[ch.key + '_up'] = r1(res.up)
+      cand[ch.key + '_lo'] = r1(res.lo)
     } else {
-      angles[ch.key + '_up'] = r1(norm(deg(Math.atan2(rel.y - r.a.y, rel.x - r.a.x) - r.th1)))
+      cand[ch.key + '_up'] = r1(norm(deg(Math.atan2(rel.y - r.a.y, rel.x - r.a.x) - r.th1)))
     }
   }
+  angles = backend.project ? backend.project(angles, cand, ch.key) : cand
   update()
 })
 const endDrag = () => {
@@ -317,6 +322,7 @@ function preset(name: string) {
   if (name === 'leg') ikTo('legR', { x: an.x - 130, y: an.y + 150 })
   if (name === 'extreme') ikTo('armR', { x: W * 0.12, y: H / 2 - H * 0.2 })
   if (name === 'cross') ikTo('legR', { x: an.x + 140, y: an.y + 40 })
+  if (backend.project) angles = backend.project({}, angles)
   update()
 }
 function seg(group: string, value: string, on: (v: string) => void) {
@@ -331,7 +337,7 @@ function seg(group: string, value: string, on: (v: string) => void) {
 }
 seg('who', who, (v) => loadCharacter(v))
 seg('algo', algo, (v) => {
-  algo = v as 'basic' | 'multi'
+  algo = v as 'fixed' | 'legacy'
   rebuild()
 })
 $('reset').addEventListener('click', () => {
@@ -344,6 +350,14 @@ $<HTMLInputElement>('wire').addEventListener('change', (e) => {
   wire.visible = showMesh
   update()
 })
+
+/* 테스트용 훅 (자동 검증에서만 사용) */
+;(window as unknown as Record<string, unknown>).__skela = {
+  set: (a: Angles) => { angles = backend.project ? backend.project({}, a) : a; update() },
+  raw: (a: Angles) => { angles = a; update() },
+  algo: (v: string) => { algo = v as 'fixed' | 'legacy'; rebuild() },
+  who: (v: string) => loadCharacter(v),
+}
 
 /* ───── 시작 ───── */
 mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, toneMapped: false }))
