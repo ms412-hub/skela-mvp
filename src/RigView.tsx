@@ -5,7 +5,7 @@ import type { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import { AssetLayer, AssetPanel } from './Assets'
 import type { AssetItem } from './Assets'
-import { buildSkin, deformSkin, makeBody, makeLimits, constrainShift, fitToLimit, STRETCH_LIMIT } from './meshSkin'
+import { buildSkin, deformSkin, makeBody, makeLimits, constrainShift, fitToLimit, withTips, STRETCH_LIMIT } from './meshSkin'
 import type { DeformStats } from './meshSkin'
 
 type Pt = { id: number; name: string; x: number; y: number }
@@ -25,16 +25,17 @@ type Chain = {
   label: string
   ids: [number, number, number] // 윗관절 → 중간관절 → 끝관절
   kind: 'arm' | 'leg'
+  tipId: number // 손끝/발끝 기준점 (MediaPipe 19/20 검지, 31/32 발끝)
   upLabel: string
   loLabel: string
 }
 
 // MediaPipe 번호: 11/12 어깨, 13/14 팔꿈치, 15/16 손목, 23/24 골반, 25/26 무릎, 27/28 발목
 const CHAINS: Chain[] = [
-  { key: 'armR', label: '오른팔', ids: [12, 14, 16], kind: 'arm', upLabel: '윗팔', loLabel: '아래팔' },
-  { key: 'armL', label: '왼팔', ids: [11, 13, 15], kind: 'arm', upLabel: '윗팔', loLabel: '아래팔' },
-  { key: 'legR', label: '오른다리', ids: [24, 26, 28], kind: 'leg', upLabel: '허벅지', loLabel: '종아리' },
-  { key: 'legL', label: '왼다리', ids: [23, 25, 27], kind: 'leg', upLabel: '허벅지', loLabel: '종아리' },
+  { key: 'armR', label: '오른팔', ids: [12, 14, 16], kind: 'arm', tipId: 20, upLabel: '윗팔', loLabel: '아래팔' },
+  { key: 'armL', label: '왼팔', ids: [11, 13, 15], kind: 'arm', tipId: 19, upLabel: '윗팔', loLabel: '아래팔' },
+  { key: 'legR', label: '오른다리', ids: [24, 26, 28], kind: 'leg', tipId: 32, upLabel: '허벅지', loLabel: '종아리' },
+  { key: 'legL', label: '왼다리', ids: [23, 25, 27], kind: 'leg', tipId: 31, upLabel: '허벅지', loLabel: '종아리' },
 ]
 
 const HAND_EXTEND = 45 // 손목 너머로 손까지 포함
@@ -628,6 +629,7 @@ function JointHandles({
   const anglesRef = useRef(angles)
   anglesRef.current = angles
   const posed = useMemo(() => posedChains(pts, W, H, angles), [pts, W, H, angles])
+  const ptsT = useMemo(() => withTips(pts), [pts])
   const [active, setActive] = useState<string | null>(null)
   const rr = Math.max(10, W / 60)
   const w2 = (p: P) => ({ x: p.x - W / 2, y: H / 2 - p.y })
@@ -638,13 +640,18 @@ function JointHandles({
       const a = w2(ch.a)
       const m = w2(ch.m)
       const e = w2(ch.e)
-      arr.push(a.x, a.y, 0, m.x, m.y, 0, m.x, m.y, 0, e.x, e.y, 0)
+      const def = CHAINS.find((c) => c.key === ch.key)!
+      const e0 = w2(ptsT.find((p) => p.id === def.ids[2])!)
+      const t0 = w2(ptsT.find((p) => p.id === def.tipId)!)
+      const tot = (angles[ch.key + '_up'] ?? 0) + (angles[ch.key + '_lo'] ?? 0) + (angles[ch.key + '_ft'] ?? 0)
+      const vr = rot({ x: t0.x - e0.x, y: t0.y - e0.y }, tot)
+      arr.push(a.x, a.y, 0, m.x, m.y, 0, m.x, m.y, 0, e.x, e.y, 0, e.x, e.y, 0, e.x + vr.x, e.y + vr.y, 0)
     }
     const g = new THREE.BufferGeometry()
     g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3))
     return new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xffffff }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [posed])
+  }, [posed, ptsT, angles])
 
   function toWorld(cx: number, cy: number) {
     const r = gl.domElement.getBoundingClientRect()
@@ -652,13 +659,17 @@ function JointHandles({
     return { x: (cx - r.left - r.width / 2) / zoom, y: -(cy - r.top - r.height / 2) / zoom }
   }
 
-  function begin(ch: Chain, part: 0 | 1 | 2, hx: number, hy: number, e: ThreeEvent<PointerEvent>) {
+  function begin(ch: Chain, part: 0 | 1 | 2 | 3, hx: number, hy: number, e: ThreeEvent<PointerEvent>) {
     e.stopPropagation()
     const p0 = toWorld(e.nativeEvent.clientX, e.nativeEvent.clientY)
     const off = { x: hx - p0.x, y: hy - p0.y } // 잡은 위치와 점 중심의 차이 (튀지 않게)
     const r = chainRest(pts, W, H, ch)
     const s0 = Math.sin(r.th2 - r.th1 + toRad(anglesRef.current[ch.key + '_lo'] ?? 0))
-    let sign = s0 > 0.05 ? 1 : s0 < -0.05 ? -1 : 0
+    // 굽힘 방향: 이미 굽어 있으면 그 방향, 펴져 있으면 사용자가 정해 둔 방향(_bs), 없으면 자동.
+    // Shift를 누르고 끌면 반대 방향(ㄴ ↔ ㄱ)으로 굽힌다.
+    let sign = s0 > 0.05 ? 1 : s0 < -0.05 ? -1 : anglesRef.current[ch.key + '_bs'] || 0
+    if (part === 2 && e.nativeEvent.shiftKey) sign = sign === 0 ? 0 : -sign
+    const flipFirst = part === 2 && e.nativeEvent.shiftKey && sign === 0
     const id = ch.key + part
     setActive(id)
     const r1 = (v: number) => Math.round(v * 10) / 10
@@ -675,11 +686,25 @@ function JointHandles({
         const dx = cur[ch.key + '_dx'] ?? 0
         const dy = cur[ch.key + '_dy'] ?? 0
         const rel = { x: t.x - dx, y: t.y - dy } // 어깨 이동분을 뺀 기준 좌표
-        if (part === 2) {
-          const res = solveIK(r, rel, cur[ch.key + '_up'] ?? 0, sign)
+        if (part === 3) {
+          // 손/발 뼈: 손목/발목을 피벗으로 손끝/발끝 방향에 맞춰 회전 (아랫뼈와 따로 꺾임)
+          const pw = ptsT
+          const e0 = w2(pw.find((p) => p.id === ch.ids[2])!)
+          const t0 = w2(pw.find((p) => p.id === ch.tipId)!)
+          const th3 = Math.atan2(t0.y - e0.y, t0.x - e0.x)
+          const pc = posedChains(pts, W, H, cur).find((c) => c.key === ch.key)!
+          const E = w2(pc.e)
+          const ang = Math.atan2(t.y - E.y, t.x - E.x)
+          cand[ch.key + '_ft'] = r1(norm(deg(ang - th3) - (cur[ch.key + '_up'] ?? 0) - (cur[ch.key + '_lo'] ?? 0)))
+        } else if (part === 2) {
+          let res = solveIK(r, rel, cur[ch.key + '_up'] ?? 0, sign)
+          if (flipFirst) {
+            res = solveIK(r, rel, cur[ch.key + '_up'] ?? 0, -res.sign)
+          }
           sign = res.sign
           cand[ch.key + '_up'] = r1(res.up)
           cand[ch.key + '_lo'] = r1(res.lo)
+          cand[ch.key + '_bs'] = sign
         } else {
           cand[ch.key + '_up'] = r1(norm(deg(Math.atan2(rel.y - r.a.y, rel.x - r.a.x) - r.th1)))
         }
@@ -701,8 +726,15 @@ function JointHandles({
       <primitive object={bones} position={[0, 0, 0.8]} />
       {posed.map((ch) => {
         const def = CHAINS.find((c) => c.key === ch.key)!
-        return ([0, 1, 2] as const).map((part) => {
-          const pw = w2(part === 0 ? ch.a : part === 1 ? ch.m : ch.e)
+        // 손/발끝 핸들 위치: 손목/발목에서 (위+아래+손발 각도)만큼 회전한 손끝/발끝
+        const e0 = w2(ptsT.find((p) => p.id === def.ids[2])!)
+        const t0 = w2(ptsT.find((p) => p.id === def.tipId)!)
+        const tot = (angles[ch.key + '_up'] ?? 0) + (angles[ch.key + '_lo'] ?? 0) + (angles[ch.key + '_ft'] ?? 0)
+        const vr = rot({ x: t0.x - e0.x, y: t0.y - e0.y }, tot)
+        const E = w2(ch.e)
+        const tipW = { x: E.x + vr.x, y: E.y + vr.y }
+        return ([0, 1, 2, 3] as const).map((part) => {
+          const pw = part === 3 ? tipW : w2(part === 0 ? ch.a : part === 1 ? ch.m : ch.e)
           const id = ch.key + part
           const on = active === id
           return (
@@ -713,8 +745,8 @@ function JointHandles({
               onPointerOver={() => (gl.domElement.style.cursor = 'pointer')}
               onPointerOut={() => (gl.domElement.style.cursor = '')}
             >
-              <circleGeometry args={[on ? rr * 1.4 : rr, 24]} />
-              <meshBasicMaterial color={part === 2 ? LIMB_COLORS[ch.key] : part === 0 ? '#ffd23f' : '#ffffff'} toneMapped={false} />
+              <circleGeometry args={[(on ? 1.4 : 1) * (part === 3 ? rr * 0.75 : rr), 24]} />
+              <meshBasicMaterial color={part === 3 ? '#c77dff' : part === 2 ? LIMB_COLORS[ch.key] : part === 0 ? '#ffd23f' : '#ffffff'} toneMapped={false} />
             </mesh>
           )
         })
@@ -899,7 +931,8 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
   // 메시 변형용: 원본 이미지(오려낸 파츠 영역은 제외)를 텍스처로 유지하고 자동 가중치 계산
   const backend = useMemo<MeshBackend | null>(() => {
     if (!meshMode) return null
-    const get = (id: number) => pts.find((p) => p.id === id)!
+    const ptsT = withTips(pts) // 손끝·발끝이 없는 옛 포즈 파일은 자동 계산해서 채움
+    const get = (id: number) => ptsT.find((p) => p.id === id)!
     const w2 = (p: P) => ({ x: p.x - width / 2, y: height / 2 - p.y })
     const chains = CHAINS.map((ch) => ({
       key: ch.key,
@@ -908,6 +941,8 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
       e: w2(get(ch.ids[2])),
       hw: ch.kind === 'arm' ? armHW : legHW,
       ext: ch.kind === 'arm' ? HAND_EXTEND : FOOT_EXTEND,
+      tip: w2(get(ch.tipId)), // 손/발을 별도 뼈로 분리
+      hwEnd: ch.kind === 'arm' ? armHW * 1.2 : legHW * 1.5, // 신발은 종아리보다 넓음
     }))
     // 다른 스키닝 방식(예: src/experimental/meshSkinMulti.ts)은 같은 MeshBackend 모양으로 여기에 연결할 수 있음
     const body = makeBody((id) => w2(get(id)))
@@ -977,6 +1012,27 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
     setPartMsg('✅ 파츠 생성됨 — 본체를 끌어 이동 / 초록 점 회전 / 노란 점 크기. 삭제하면 원래 자리로 복원돼요.')
   }
 
+  // 팔꿈치/무릎 굽힘 방향 반전 (ㄴ ↔ ㄱ): 같은 손목/발목 위치에서 IK의 다른 해로 바꾼다
+  function flipBend(key: string) {
+    const ch = CHAINS.find((c) => c.key === key)!
+    const r = chainRest(pts, width, height, ch)
+    const pc = posedChains(pts, width, height, angles).find((c) => c.key === key)!
+    const dx = angles[key + '_dx'] ?? 0
+    const dy = angles[key + '_dy'] ?? 0
+    const rel = { x: pc.e.x - width / 2 - dx, y: height / 2 - pc.e.y - dy } // 어깨 이동분을 뺀 손목/발목 위치
+    const up0 = angles[key + '_up'] ?? 0
+    const s = Math.sin(r.th2 - r.th1 + toRad(angles[key + '_lo'] ?? 0))
+    const cur = s > 0.05 ? 1 : s < -0.05 ? -1 : angles[key + '_bs'] || solveIK(r, rel, up0, 0).sign
+    const res = solveIK(r, rel, up0, -cur)
+    const cand = {
+      ...angles,
+      [key + '_up']: Math.round(res.up * 10) / 10,
+      [key + '_lo']: Math.round(res.lo * 10) / 10,
+      [key + '_bs']: -cur,
+    }
+    setAngles(backend?.project ? backend.project(angles, cand, key) : cand)
+  }
+
   function saveScreen() {
     const c = glEl.current
     if (!c) return
@@ -1044,7 +1100,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
         alert('기본 관절(13개)이 빠진 포즈 파일이에요.')
       } else {
         const ids = new Set<number>(d.points.map((q: Pt) => q.id))
-        onPtsLoad(d.points)
+        onPtsLoad(withTips(d.points))
         onLinksLoad(
           Array.isArray(d.links)
             ? d.links.filter((l: [number, number]) => ids.has(l[0]) && ids.has(l[1]))
@@ -1149,8 +1205,19 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
           {meshMode ? '메시 변형 모드 켜짐 (끄기)' : '메시 변형 모드 켜기'}
         </button>
         {meshMode && (
+          <div className="btns" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {CHAINS.map((ch) => (
+              <button key={ch.key} className="btn ghost" onClick={() => flipBend(ch.key)}>
+                {ch.label} 굽힘 반전
+              </button>
+            ))}
+          </div>
+        )}
+        {meshMode && (
           <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.5 }}>
-            노란 점=어깨/골반(통째 이동) · 흰 점=팔꿈치/무릎(굽히기) · 색 점=손목/발목(IK). 영향 범위는 아래 팔/다리 폭 슬라이더.
+            노란 점=어깨/골반(통째 이동) · 흰 점=팔꿈치/무릎(굽히기) · 색 점=손목/발목(IK) · 보라 점=손끝/발끝(손·발만 따로 꺾기).
+            <br />
+            색 점을 Shift를 누른 채 끌거나 아래 버튼을 누르면 굽힘 방향이 반대(ㄴ ↔ ㄱ)가 됩니다.
             <br />
             뒤집힌 삼각형 {stats.folds}개 · 최대 늘어남 ×{stats.maxStretch.toFixed(2)} · 한도 초과 삼각형 {stats.overLimit}개 · {stats.ms.toFixed(1)}ms
           </div>

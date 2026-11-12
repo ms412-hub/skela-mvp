@@ -10,7 +10,9 @@ export type RestChain = {
   m: V2 // 중간관절(팔꿈치/무릎)
   e: V2 // 끝관절(손목/발목)
   hw: number // 영향 반폭 (이 안은 100% 뼈를 따라감)
-  ext: number // 끝관절 너머 손/발까지 포함하는 길이
+  ext: number // tip이 없을 때 끝관절 너머 손/발까지 포함하는 길이
+  tip?: V2 // 손끝/발끝 기준점. 있으면 손/발을 별도 뼈(끝관절→tip)로 취급
+  hwEnd?: number // 손/발 뼈의 반폭 (기본은 hw). 신발처럼 아랫다리보다 넓은 부분을 통째로 따라가게 함
 }
 
 // 움직이지 않아야 하는 머리·몸통. 이 영역의 정점은 팔다리 영향에서 제외(보호)한다.
@@ -26,7 +28,7 @@ export type BodyProtect = {
   pelvisB: V2
   pelvisR: number
   pelvisFade: number
-  // 샅 중앙선: 골반 중심에서 두 발목의 중간까지 내려가는 가는 보호선. 좌우 다리의 경계(충돌)를 완만하게 만든다
+  // 샅 중앙선: 골반 중심에서 허벅지 위쪽까지만 내려가는 가는 보호선. 좌우 다리의 경계(충돌)를 완만하게 만든다
   crotchA: V2
   crotchB: V2
   crotchR: number
@@ -52,12 +54,11 @@ export function makeBody(P: (id: number) => V2): BodyProtect {
     x: hl.x + (hr.x - hl.x) * t + (down.x / dl) * sag,
     y: hl.y + (hr.y - hl.y) * t + (down.y / dl) * sag,
   })
-  const an = mid(P(27), P(28))
   const kn = mid(P(25), P(26))
   const cA = at(0.5)
   return {
     crotchA: cA,
-    crotchB: { x: an.x + (an.x - kn.x), y: an.y + (an.y - kn.y) }, // 발목에서 정강이 길이만큼 더 아래(신발)까지
+    crotchB: { x: cA.x + (kn.x - cA.x) * 0.3, y: cA.y + (kn.y - cA.y) * 0.3 }, // 허벅지 위쪽 30%까지만. 그 아래는 다리가 자유롭게 움직여야 함
     crotchR: Wh * 0.10,
     crotchFade: Wh * 0.40, // 다리 중심(Wh/2)에 닿으면 보호가 0
     pelvisA: at(0.2),
@@ -81,7 +82,8 @@ export type Skin = {
   index: Uint32Array
   nc: number // 팔다리 수
   w: Float32Array // 정점×팔다리 영향도(0~1). 모든 팔다리 영향의 합이 1을 넘지 않고, 나머지는 고정(정지) 가중치
-  wUp: Float32Array // 정점×팔다리별 윗뼈 가중치 (아래뼈는 1-wUp)
+  wUp: Float32Array // 정점×팔다리별 윗뼈 가중치
+  wEnd: Float32Array // 정점×팔다리별 손/발 뼈 가중치 (아랫뼈 가중치 = 1 - wUp - wEnd)
   active: Uint8Array // 어떤 팔다리의 영향이라도 받으면 1
   chains: RestChain[]
 }
@@ -113,10 +115,12 @@ export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, 
   const uv = new Float32Array(n * 2)
   const w = new Float32Array(n * nc)
   const wUp = new Float32Array(n * nc).fill(1)
+  const wEnd = new Float32Array(n * nc)
   const active = new Uint8Array(n)
 
-  // 끝관절 너머까지 늘린 아랫뼈 끝점
+  // 손/발끝: 명시된 tip이 있으면 그것, 없으면 아랫뼈 방향으로 ext만큼 연장
   const tips = chains.map((c) => {
+    if (c.tip) return c.tip
     const dx = c.e.x - c.m.x
     const dy = c.e.y - c.m.y
     const l = Math.hypot(dx, dy) || 1
@@ -152,20 +156,34 @@ export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, 
 
       let sum = 0
       chains.forEach((c, ci) => {
+        const hwE = c.hwEnd ?? c.hw
         const dUp = distSeg({ x, y }, c.a, c.m)
-        const dLo = distSeg({ x, y }, c.m, tips[ci])
-        const d = Math.min(dUp, dLo)
+        const dLo = distSeg({ x, y }, c.m, c.e)
+        const dEnd = distSeg({ x, y }, c.e, tips[ci])
+        // 세 뼈 중 자기 반폭 기준으로 가장 가까운 뼈까지의 "여유"(0 이하면 뼈 폭 안쪽)
+        const exUp = dUp - c.hw
+        const exLo = dLo - c.hw
+        const exEnd = dEnd - hwE
+        const ex = Math.min(exUp, exLo, exEnd)
         const L1 = Math.hypot(c.m.x - c.a.x, c.m.y - c.a.y)
-        const S = dUp <= dLo ? segT({ x, y }, c.a, c.m) * L1 : L1 + segT({ x, y }, c.m, tips[ci]) * Math.hypot(tips[ci].x - c.m.x, tips[ci].y - c.m.y)
+        const L2 = Math.hypot(c.e.x - c.m.x, c.e.y - c.m.y)
+        const S = ex === exUp ? segT({ x, y }, c.a, c.m) * L1 : ex === exLo ? L1 + segT({ x, y }, c.m, c.e) * L2 : L1 + L2 + segT({ x, y }, c.e, tips[ci]) * Math.hypot(tips[ci].x - c.e.x, tips[ci].y - c.e.y)
         // 가장자리에서 서서히 약해지는 구간. 윗관절에서 멀수록(지렛대가 길수록) 이동량이 크므로 구간도 넓힌다.
         const fall = Math.max(c.hw * 1.5, 40, S * 0.45)
-        const t = (d - c.hw) / fall
+        const t = ex / fall
         const fv = t <= 0 ? 1 : t >= 1 ? 0 : 1 - smooth(t)
         const wc = fv * (1 - protect)
         w[k * nc + ci] = wc
         sum += wc
-        const blend = Math.max(4, c.hw * 0.5) // 관절 주변에서 윗/아랫뼈가 섞이는 폭
-        wUp[k * nc + ci] = 1 / (1 + Math.exp((dUp - dLo) / blend))
+        // 윗뼈/아랫뼈/손발 뼈 가중치: 각 뼈까지 거리로 부드럽게 섞는다 (관절 근처에서만 섞임)
+        const blend = Math.max(4, c.hw * 0.5)
+        const m0 = Math.min(dUp, dLo, dEnd)
+        const eU = Math.exp(-(dUp - m0) / blend)
+        const eL = Math.exp(-(dLo - m0) / blend)
+        const eE = Math.exp(-(dEnd - m0) / blend)
+        const tot = eU + eL + eE
+        wUp[k * nc + ci] = eU / tot
+        wEnd[k * nc + ci] = eE / tot
       })
       if (sum > 1) for (let ci = 0; ci < nc; ci++) w[k * nc + ci] /= sum // 합이 1을 넘으면 비율만 유지
       if (sum > 1e-6) active[k] = 1
@@ -184,7 +202,7 @@ export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, 
       q += 6
     }
   }
-  return { nx, ny, rest, uv, index, nc, w, wUp, active, chains }
+  return { nx, ny, rest, uv, index, nc, w, wUp, wEnd, active, chains }
 }
 
 export type DeformStats = { folds: number; maxStretch: number; overLimit: number }
@@ -200,7 +218,7 @@ export function deformSkin(
   out: Float32Array,
   outIndex?: Uint32Array,
 ): DeformStats & { drawCount: number } {
-  const { rest, w, wUp, nc, active, chains, nx, ny } = skin
+  const { rest, w, wUp, wEnd, nc, active, chains, nx, ny } = skin
 
   const T = chains.map((c) => {
     const up = angles[c.key + '_up'] ?? 0
@@ -215,7 +233,14 @@ export function deformSkin(
     const vx = c.m.x - c.a.x
     const vy = c.m.y - c.a.y
     const Mp = { x: Ap.x + vx * cu - vy * su, y: Ap.y + vx * su + vy * cu }
-    return { c, cu, su, cl, sl, Ap, Mp }
+    // 손/발 뼈: 끝관절을 피벗으로 (위+아래+손발 각도)만큼 회전. _ft가 0이면 아랫뼈와 완전히 같은 움직임
+    const ft = angles[c.key + '_ft'] ?? 0
+    const ce = Math.cos(rad(up + lo + ft))
+    const se = Math.sin(rad(up + lo + ft))
+    const ex = c.e.x - c.m.x
+    const ey = c.e.y - c.m.y
+    const Ep = { x: Mp.x + ex * cl - ey * sl, y: Mp.y + ex * sl + ey * cl }
+    return { c, cu, su, cl, sl, ce, se, Ap, Mp, Ep }
   })
 
   // 정점 = (1 - Σ팔다리영향)·원래 위치 + Σ 팔다리영향·(윗뼈/아랫뼈 LBS 결과)
@@ -243,9 +268,15 @@ export function deformSkin(
       const ly = y - t.c.m.y
       const qx = t.Mp.x + lx * t.cl - ly * t.sl
       const qy = t.Mp.y + lx * t.sl + ly * t.cl
+      const ex = x - t.c.e.x
+      const ey = y - t.c.e.y
+      const rx = t.Ep.x + ex * t.ce - ey * t.se
+      const ry = t.Ep.y + ex * t.se + ey * t.ce
       const wu = wUp[k * nc + ci]
-      ox += wc * (wu * px + (1 - wu) * qx)
-      oy += wc * (wu * py + (1 - wu) * qy)
+      const we = wEnd[k * nc + ci]
+      const wl = 1 - wu - we
+      ox += wc * (wu * px + wl * qx + we * rx)
+      oy += wc * (wu * py + wl * qy + we * ry)
       wsum += wc
     }
     out[k * 3] = ox + (1 - wsum) * x
@@ -302,7 +333,7 @@ export function fitToLimit(check: (a: Angles) => boolean, prev: Angles, cand: An
     for (const k of keys) {
       const p = prev[k] ?? 0
       const c = cand[k] ?? 0
-      o[k] = k.endsWith('_up') || k.endsWith('_lo') ? wrap(p + wrap(c - p) * t) : p + (c - p) * t
+      o[k] = k.endsWith('_bs') ? c : k.endsWith('_up') || k.endsWith('_lo') || k.endsWith('_ft') ? wrap(p + wrap(c - p) * t) : p + (c - p) * t // _bs(굽힘 방향)는 보간하지 않음
     }
     return o
   }
@@ -317,6 +348,8 @@ export function fitToLimit(check: (a: Angles) => boolean, prev: Angles, cand: An
 }
 
 /* ───────── 어깨·골반 이동 제한 (골격이 머리부터 이어진 구조라 크게 벌어지지 않게) ───────── */
+
+export const FT_LIMIT = 70 // 손목/발목 각도 한계(도)
 
 export type JointLimits = {
   shift: Record<string, number> // 팔다리 키 → 윗관절(어깨/골반) 최대 이동 반경
@@ -351,7 +384,11 @@ export function constrainShift(chains: RestChain[], lim: JointLimits, angles: An
       o[key + '_dy'] = (y / l) * r
     }
   }
-  for (const c of chains) clampR(c.key)
+  for (const c of chains) {
+    clampR(c.key)
+    const ft = o[c.key + '_ft']
+    if (ft !== undefined) o[c.key + '_ft'] = Math.max(-FT_LIMIT, Math.min(FT_LIMIT, ft)) // 손/발목 꺾임 범위
+  }
   for (const pr of lim.pairs) {
     const ca = chains.find((c) => c.key === pr.a)
     const cb = chains.find((c) => c.key === pr.b)
@@ -375,4 +412,27 @@ export function constrainShift(chains: RestChain[], lim: JointLimits, angles: An
     }
   }
   return o
+}
+
+/* ───────── 손끝/발끝 기준점 ───────── */
+
+// MediaPipe 번호: 19/20 검지(손끝), 31/32 발끝. 오래된 포즈 파일처럼 없으면 아랫뼈 방향으로 연장해서 만든다.
+export const TIP_IDS = [
+  { id: 19, name: '왼쪽 손끝', wrist: 15, mid: 13, k: 0.4 },
+  { id: 20, name: '오른쪽 손끝', wrist: 16, mid: 14, k: 0.4 },
+  { id: 31, name: '왼쪽 발끝', wrist: 27, mid: 25, k: 0.9 },
+  { id: 32, name: '오른쪽 발끝', wrist: 28, mid: 26, k: 0.9 },
+] as const
+
+export function withTips<T extends { id: number; name: string; x: number; y: number }>(pts: T[]): T[] {
+  const get = (id: number) => pts.find((p) => p.id === id)
+  const out = [...pts]
+  for (const t of TIP_IDS) {
+    if (get(t.id)) continue
+    const e = get(t.wrist)
+    const m = get(t.mid)
+    if (!e || !m) continue
+    out.push({ id: t.id, name: t.name, x: e.x + (e.x - m.x) * t.k, y: e.y + (e.y - m.y) * t.k } as T)
+  }
+  return out
 }
