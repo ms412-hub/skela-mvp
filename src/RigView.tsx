@@ -6,7 +6,7 @@ import * as THREE from 'three'
 import { AssetLayer, AssetPanel } from './Assets'
 import type { AssetItem } from './Assets'
 import { buildSkin, deformSkin } from './meshSkin'
-import type { DeformStats, Skin } from './meshSkin'
+import type { DeformStats } from './meshSkin'
 
 type Pt = { id: number; name: string; x: number; y: number }
 type P = { x: number; y: number }
@@ -557,34 +557,49 @@ function Limb({ data, upDeg, loDeg, dx = 0, dy = 0 }: { data: LimbData; upDeg: n
 
 /* ───────────── 메시 변형 모드: 이미지 전체를 하나의 메시로 휘게 함 ───────────── */
 
+// 변형 알고리즘 어댑터: 어떤 스키닝 방식이든 같은 모양으로 DeformMesh에 연결
+type MeshBackend = {
+  rest: Float32Array
+  uv: Float32Array
+  index: Uint32Array
+  deform: (
+    angles: Record<string, number>,
+    out: Float32Array,
+    outIndex: Uint32Array,
+  ) => DeformStats & { drawCount: number }
+}
+type MeshStats = DeformStats & { ms: number }
+
 function DeformMesh({
-  skin,
+  backend,
   tex,
   angles,
   onStats,
 }: {
-  skin: Skin
+  backend: MeshBackend
   tex: THREE.Texture
   angles: Record<string, number>
-  onStats: (s: DeformStats) => void
+  onStats: (s: MeshStats) => void
 }) {
   const geom = useMemo(() => {
     const g = new THREE.BufferGeometry()
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(skin.rest), 3))
-    g.setAttribute('uv', new THREE.BufferAttribute(skin.uv, 2))
-    g.setIndex(new THREE.BufferAttribute(new Uint32Array(skin.index), 1))
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(backend.rest), 3))
+    g.setAttribute('uv', new THREE.BufferAttribute(backend.uv, 2))
+    g.setIndex(new THREE.BufferAttribute(new Uint32Array(backend.index), 1))
     return g
-  }, [skin])
+  }, [backend])
   useEffect(() => {
     const pos = geom.getAttribute('position') as THREE.BufferAttribute
     const idx = geom.getIndex()!
-    const r = deformSkin(skin, angles, pos.array as Float32Array, idx.array as Uint32Array)
+    const t0 = performance.now()
+    const r = backend.deform(angles, pos.array as Float32Array, idx.array as Uint32Array)
+    const ms = performance.now() - t0
     idx.needsUpdate = true
     geom.setDrawRange(0, r.drawCount)
-    onStats({ folds: r.folds, maxStretch: r.maxStretch, hidden: r.hidden })
+    onStats({ folds: r.folds, maxStretch: r.maxStretch, hidden: r.hidden, ms })
     pos.needsUpdate = true
     geom.computeBoundingSphere()
-  }, [geom, skin, angles, onStats])
+  }, [geom, backend, angles, onStats])
   return (
     <mesh geometry={geom} frustumCulled={false}>
       <meshBasicMaterial map={tex} transparent depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
@@ -809,7 +824,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
   const glEl = useRef<HTMLCanvasElement | null>(null)
   const [selectMode, setSelectMode] = useState(false) // 이미지 영역(파츠) 선택 모드
   const [meshMode, setMeshMode] = useState(false) // 메시 변형 모드 (이미지가 관절을 따라 휨)
-  const [stats, setStats] = useState<DeformStats>({ folds: 0, maxStretch: 1, hidden: 0 })
+  const [stats, setStats] = useState<MeshStats>({ folds: 0, maxStretch: 1, hidden: 0, ms: 0 })
   const [partMsg, setPartMsg] = useState('')
 
    // Gemini API 연동 State 및 함수
@@ -874,22 +889,21 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
   const baseTex = useMemo(() => mkTex(rig.base), [rig])
 
   // 메시 변형용: 원본 이미지(오려낸 파츠 영역은 제외)를 텍스처로 유지하고 자동 가중치 계산
-  const skin = useMemo(() => {
+  const backend = useMemo<MeshBackend | null>(() => {
     if (!meshMode) return null
     const get = (id: number) => pts.find((p) => p.id === id)!
     const w2 = (p: P) => ({ x: p.x - width / 2, y: height / 2 - p.y })
-    return buildSkin(
-      CHAINS.map((ch) => ({
-        key: ch.key,
-        a: w2(get(ch.ids[0])),
-        m: w2(get(ch.ids[1])),
-        e: w2(get(ch.ids[2])),
-        hw: ch.kind === 'arm' ? armHW : legHW,
-        ext: ch.kind === 'arm' ? HAND_EXTEND : FOOT_EXTEND,
-      })),
-      width,
-      height,
-    )
+    const chains = CHAINS.map((ch) => ({
+      key: ch.key,
+      a: w2(get(ch.ids[0])),
+      m: w2(get(ch.ids[1])),
+      e: w2(get(ch.ids[2])),
+      hw: ch.kind === 'arm' ? armHW : legHW,
+      ext: ch.kind === 'arm' ? HAND_EXTEND : FOOT_EXTEND,
+    }))
+    // 다른 스키닝 방식(예: src/experimental/meshSkinMulti.ts)은 같은 MeshBackend 모양으로 여기에 연결할 수 있음
+    const sk = buildSkin(chains, width, height)
+    return { rest: sk.rest, uv: sk.uv, index: sk.index, deform: (a, o, i) => deformSkin(sk, a, o, i) }
   }, [meshMode, pts, width, height, armHW, legHW])
   const meshTex = useMemo(() => (meshMode ? mkTex(rig.src) : null), [meshMode, rig])
 
@@ -1061,9 +1075,9 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
             <color attach="background" args={[rig.bg]} />
             <FitCamera w={width} h={height} />
 
-            {meshMode && skin && meshTex ? (
+            {meshMode && backend && meshTex ? (
               <>
-                <DeformMesh skin={skin} tex={meshTex} angles={angles} onStats={setStats} />
+                <DeformMesh backend={backend} tex={meshTex} angles={angles} onStats={setStats} />
                 <JointHandles pts={pts} W={width} H={height} angles={angles} setAngles={setAngles} />
               </>
             ) : (
@@ -1116,7 +1130,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
           <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.5 }}>
             노란 점=어깨/골반(통째 이동) · 흰 점=팔꿈치/무릎(굽히기) · 색 점=손목/발목(IK). 영향 범위는 아래 팔/다리 폭 슬라이더.
             <br />
-            뒤집힌 삼각형 {stats.folds}개 · 최대 늘어남 ×{stats.maxStretch.toFixed(2)} · 숨긴 삼각형 {stats.hidden}개
+            뒤집힌 삼각형 {stats.folds}개 · 최대 늘어남 ×{stats.maxStretch.toFixed(2)} · 숨긴 삼각형 {stats.hidden}개 · {stats.ms.toFixed(1)}ms
           </div>
         )}
         <div className="panel-title">자세 잡기 (손목·발목·팔꿈치·무릎 점을 끌어보세요)</div>
