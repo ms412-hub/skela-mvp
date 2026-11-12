@@ -85,6 +85,8 @@ export type Skin = {
   wUp: Float32Array // 정점×팔다리별 윗뼈 가중치
   wEnd: Float32Array // 정점×팔다리별 손/발 뼈 가중치 (아랫뼈 가중치 = 1 - wUp - wEnd)
   active: Uint8Array // 어떤 팔다리의 영향이라도 받으면 1
+  prot: Float32Array // 머리·몸통·골반 보호도 0~1 (부위 색칠 보기와 검증용)
+  region: Uint8Array // 가장 강하게 보호하는 영역: 0 없음, 1 머리, 2 몸통, 3 골반·샅
   chains: RestChain[]
 }
 
@@ -102,6 +104,8 @@ function distSeg(p: V2, a: V2, b: V2) {
 }
 
 const smooth = (t: number) => t * t * (3 - 2 * t)
+const TERRITORY_MARGIN = 10 // 손/발 영역 경계의 부드러운 구간 반폭(px)
+const TERRITORY_LIMB = 40 // 팔다리 영역 경계의 부드러운 구간 반폭(px). 10~55 측정: 넓을수록 다리 늘어남이 줄고(무릎 굽힘 ×6.3→×2.9), 반대 다리 간섭은 5~8px로 비슷함
 
 // 이미지 W×H 위에 격자 메시를 만들고 정점마다 자동 가중치를 계산.
 // 가중치는 팔다리마다 따로 연속적으로 계산해 그대로 섞는다(가장 가까운 팔다리 하나로 갈라 붙이지 않음).
@@ -117,6 +121,8 @@ export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, 
   const wUp = new Float32Array(n * nc).fill(1)
   const wEnd = new Float32Array(n * nc)
   const active = new Uint8Array(n)
+  const protA = new Float32Array(n)
+  const region = new Uint8Array(n)
 
   // 손/발끝: 명시된 tip이 있으면 그것, 없으면 아랫뼈 방향으로 ext만큼 연장
   const tips = chains.map((c) => {
@@ -152,9 +158,14 @@ export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, 
         const dc = distSeg({ x, y }, body.crotchA, body.crotchB)
         const pc = dc <= body.crotchR ? 1 : dc >= body.crotchR + body.crotchFade ? 0 : 1 - smooth((dc - body.crotchR) / body.crotchFade)
         protect = Math.max(pt, ph, pp, pc)
+        const pm = Math.max(pt, ph, pp, pc)
+        if (pm > 0.01) region[k] = pm === ph ? 1 : pm === pt ? 2 : 3
       }
+      protA[k] = protect
 
       let sum = 0
+      const dEndArr: number[] = [] // 각 팔다리의 손/발 뼈까지 거리
+      const dAxisArr: number[] = [] // 각 팔다리 축(세 뼈 중 가장 가까운 선분)까지 거리
       chains.forEach((c, ci) => {
         const hwE = c.hwEnd ?? c.hw
         const dUp = distSeg({ x, y }, c.a, c.m)
@@ -165,6 +176,8 @@ export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, 
         const exLo = dLo - c.hw
         const exEnd = dEnd - hwE
         const ex = Math.min(exUp, exLo, exEnd)
+        dEndArr[ci] = dEnd
+        dAxisArr[ci] = Math.min(dUp, dLo, dEnd)
         const L1 = Math.hypot(c.m.x - c.a.x, c.m.y - c.a.y)
         const L2 = Math.hypot(c.e.x - c.m.x, c.e.y - c.m.y)
         const S = ex === exUp ? segT({ x, y }, c.a, c.m) * L1 : ex === exLo ? L1 + segT({ x, y }, c.m, c.e) * L2 : L1 + L2 + segT({ x, y }, c.e, tips[ci]) * Math.hypot(tips[ci].x - c.e.x, tips[ci].y - c.e.y)
@@ -185,7 +198,31 @@ export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, 
         wUp[k * nc + ci] = eU / tot
         wEnd[k * nc + ci] = eE / tot
       })
-      if (sum > 1) for (let ci = 0; ci < nc; ci++) w[k * nc + ci] /= sum // 합이 1을 넘으면 비율만 유지
+      // 팔다리 영역(territory): 정점은 자기 축이 다른 팔다리 축보다 가까운 쪽의 영향을 받는다.
+      // 경계 폭이 지렛대에 비례해 넓어서, 이걸 하지 않으면 붙은 두 다리가 서로의 종아리·발에서 0.5/0.5로 섞여
+      // 한쪽을 움직일 때 반대쪽이 절반씩 따라온다(측정). 경계는 ±TERRITORY_LIMB에 걸쳐 부드럽게 이어진다.
+      if (nc > 1) {
+        for (let ci = 0; ci < nc; ci++) {
+          let other = Infinity
+          for (let cj = 0; cj < nc; cj++) if (cj !== ci) other = Math.min(other, dAxisArr[cj])
+          const u = Math.min(1, Math.max(0, (other - dAxisArr[ci]) / (2 * TERRITORY_LIMB) + 0.5))
+          w[k * nc + ci] *= smooth(u)
+        }
+        sum = 0
+        for (let ci = 0; ci < nc; ci++) sum += w[k * nc + ci]
+        if (sum > 1) for (let ci = 0; ci < nc; ci++) w[k * nc + ci] /= sum // 안전장치: 합이 1을 넘지 않게
+      }
+      // 손/발 각도(_ft)는 "내 영역"에서만 받는다: 이 팔다리의 손/발 축이 다른 팔다리의 손/발 축보다 가까운 정점만.
+      // 붙어 있는 두 발에서 한쪽 발목을 돌릴 때 반대쪽 신발이 따라 기우는 것을 막는다.
+      // 잃는 손/발 가중치는 아랫뼈로 돌려 일반 굽힘(_up/_lo)은 그대로 이어진다. 경계는 ±TERRITORY_MARGIN px에 걸쳐 부드럽게 이어짐.
+      if (nc > 1) {
+        for (let ci = 0; ci < nc; ci++) {
+          let other = Infinity
+          for (let cj = 0; cj < nc; cj++) if (cj !== ci) other = Math.min(other, dEndArr[cj])
+          const u = Math.min(1, Math.max(0, (other - dEndArr[ci]) / (2 * TERRITORY_MARGIN) + 0.5))
+          wEnd[k * nc + ci] *= smooth(u)
+        }
+      }
       if (sum > 1e-6) active[k] = 1
     }
   }
@@ -202,14 +239,29 @@ export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, 
       q += 6
     }
   }
-  return { nx, ny, rest, uv, index, nc, w, wUp, wEnd, active, chains }
+  return { nx, ny, rest, uv, index, nc, w, wUp, wEnd, active, prot: protA, region, chains }
 }
 
 export type DeformStats = { folds: number; maxStretch: number; overLimit: number }
 
 // 격자 변이 원래 길이의 이 배율을 넘으면 "과도하게 늘어남"으로 센다. 삼각형을 숨기지는 않는다.
 // 조작 중에는 이 한도를 넘는 자세로 가지 않도록 fitToLimit으로 입력을 제한한다.
-export const STRETCH_LIMIT = 5
+export const STRETCH_LIMIT = 5 // 다리(발·신발이 번지기 시작하는 값)와 기본값
+export const STRETCH_LIMIT_ARM = 7 // 팔: 팔 올리기 ×6.4와 굽힘 반전 ×6.0~6.3이 화면상 괜찮았음(측정)
+
+// 이번 조작에서 바뀐 팔다리에 맞는 늘어남 한도. 다리 값이 하나라도 바뀌면 다리 한도를 쓴다.
+export function limitFor(prev: Record<string, number>, cand: Record<string, number>, pin?: string): number {
+  const keys = new Set([...Object.keys(prev), ...Object.keys(cand)])
+  let legChanged = false
+  let armChanged = false
+  for (const k of keys) {
+    if (Math.abs((cand[k] ?? 0) - (prev[k] ?? 0)) < 1e-6) continue
+    if (k.startsWith('leg')) legChanged = true
+    else if (k.startsWith('arm')) armChanged = true
+  }
+  if (pin) return pin.startsWith('arm') && !legChanged ? STRETCH_LIMIT_ARM : STRETCH_LIMIT
+  return armChanged && !legChanged ? STRETCH_LIMIT_ARM : STRETCH_LIMIT
+}
 
 // angles: RigView와 같은 {key_up, key_lo, key_dx, key_dy}. out에 변형된 xyz를 씀.
 export function deformSkin(
@@ -424,7 +476,22 @@ export const TIP_IDS = [
   { id: 32, name: '오른쪽 발끝', wrist: 28, mid: 26, k: 0.9 },
 ] as const
 
-export function withTips<T extends { id: number; name: string; x: number; y: number }>(pts: T[]): T[] {
+// 점 (x, y)가 이미지(0..w, 0..h) 밖이면 기준점 e에서 같은 방향으로 경계 안(여백 4px)까지만 가게 줄인다.
+function clampToImage(e: V2, x: number, y: number, bounds?: { w: number; h: number }): V2 {
+  if (!bounds) return { x, y }
+  const m = 4
+  let t = 1
+  const dx = x - e.x
+  const dy = y - e.y
+  if (dx > 1e-9) t = Math.min(t, (bounds.w - m - e.x) / dx)
+  if (dx < -1e-9) t = Math.min(t, (m - e.x) / dx)
+  if (dy > 1e-9) t = Math.min(t, (bounds.h - m - e.y) / dy)
+  if (dy < -1e-9) t = Math.min(t, (m - e.y) / dy)
+  t = Math.max(0, t)
+  return { x: e.x + dx * t, y: e.y + dy * t }
+}
+
+export function withTips<T extends { id: number; name: string; x: number; y: number }>(pts: T[], bounds?: { w: number; h: number }): T[] {
   const get = (id: number) => pts.find((p) => p.id === id)
   const out = [...pts]
   for (const t of TIP_IDS) {
@@ -432,7 +499,176 @@ export function withTips<T extends { id: number; name: string; x: number; y: num
     const e = get(t.wrist)
     const m = get(t.mid)
     if (!e || !m) continue
-    out.push({ id: t.id, name: t.name, x: e.x + (e.x - m.x) * t.k, y: e.y + (e.y - m.y) * t.k } as T)
+    const c = clampToImage(e, e.x + (e.x - m.x) * t.k, e.y + (e.y - m.y) * t.k, bounds)
+    out.push({ id: t.id, name: t.name, x: c.x, y: c.y } as T)
   }
   return out
+}
+
+/* ───────── 손끝/발끝 보정 ───────── */
+
+// 랜드마크의 발끝은 신발 바닥이 아니라 앞쪽 윗부분이라 너무 짧게 잡히는 일이 많다.
+// 발끝이 정강이 길이의 0.9배, 손끝이 아래팔의 0.4배보다 짧으면 같은 방향으로 그 길이까지 늘린다.
+export function normalizeTips<T extends { id: number; name: string; x: number; y: number }>(pts: T[], bounds?: { w: number; h: number }): T[] {
+  const get = (id: number) => pts.find((p) => p.id === id)
+  return pts.map((p) => {
+    const t = TIP_IDS.find((q) => q.id === p.id)
+    const e = t && get(t.wrist)
+    const m = t && get(t.mid)
+    if (!t || !e || !m) return p
+    const min = t.k * Math.hypot(e.x - m.x, e.y - m.y)
+    const dx = p.x - e.x
+    const dy = p.y - e.y
+    const len = Math.hypot(dx, dy)
+    if (len >= min) return p
+    const ux = len > 1e-6 ? dx / len : (e.x - m.x) / (Math.hypot(e.x - m.x, e.y - m.y) || 1)
+    const uy = len > 1e-6 ? dy / len : (e.y - m.y) / (Math.hypot(e.x - m.x, e.y - m.y) || 1)
+    const c = clampToImage(e, e.x + ux * min, e.y + uy * min, bounds) // 이미지 밖으로 나가면 같은 방향으로 경계까지만
+    return { ...p, x: c.x, y: c.y }
+  })
+}
+
+/* ───────── IK와 굽힘 반전 (앱과 체험 페이지가 같이 쓰는 계산) ───────── */
+
+export type LimbRest = { a: V2; L1: number; L2: number; th1: number; th2: number }
+export function limbRest(a: V2, m: V2, e: V2): LimbRest {
+  return {
+    a,
+    L1: Math.hypot(m.x - a.x, m.y - a.y),
+    L2: Math.hypot(e.x - m.x, e.y - m.y),
+    th1: Math.atan2(m.y - a.y, m.x - a.x),
+    th2: Math.atan2(e.y - m.y, e.x - m.x),
+  }
+}
+const deg = (r: number) => (r * 180) / Math.PI
+
+// 끝관절을 target에 가져가도록 윗/아랫뼈 각도 계산. sign은 두 해(ㄴ/ㄱ) 중 어느 쪽인지(0이면 현재 자세에 가까운 쪽).
+export function solveIK(r: LimbRest, target: V2, curUp: number, sign: number) {
+  const { a, L1, L2, th1, th2 } = r
+  const dx = target.x - a.x
+  const dy = target.y - a.y
+  const dist = Math.min(Math.max(Math.hypot(dx, dy), Math.abs(L1 - L2) + 1), L1 + L2 - 1)
+  const beta = Math.atan2(dy, dx)
+  const cosA = (L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist)
+  const alpha = Math.acos(Math.min(1, Math.max(-1, cosA)))
+  const c1 = beta + alpha
+  const c2 = beta - alpha
+  let sg = sign
+  if (sg === 0) {
+    const cur = th1 + rad(curUp)
+    const far = (x: number) => Math.abs(wrap(deg(x - cur)))
+    sg = far(c1) < far(c2) ? -1 : 1
+  }
+  const phi1 = sg < 0 ? c1 : c2
+  const mx = a.x + L1 * Math.cos(phi1)
+  const my = a.y + L1 * Math.sin(phi1)
+  const phi2 = Math.atan2(a.y + dist * Math.sin(beta) - my, a.x + dist * Math.cos(beta) - mx)
+  const up = wrap(deg(phi1 - th1))
+  return { up, lo: wrap(deg(phi2 - th2) - up), sign: sg }
+}
+
+// 팔꿈치/무릎 굽힘 방향 반전(ㄴ ↔ ㄱ): 같은 손목/발목 위치(rel, 윗관절 이동분을 뺀 좌표)에서 IK의 반대 해로 바꾼다.
+export function flipBendAngles(r: LimbRest, rel: V2, angles: Angles, key: string): Angles {
+  const up0 = angles[key + '_up'] ?? 0
+  const s = Math.sin(r.th2 - r.th1 + rad(angles[key + '_lo'] ?? 0))
+  const cur = s > 0.05 ? 1 : s < -0.05 ? -1 : angles[key + '_bs'] || solveIK(r, rel, up0, 0).sign
+  const res = solveIK(r, rel, up0, -cur)
+  return {
+    ...angles,
+    [key + '_up']: Math.round(res.up * 10) / 10,
+    [key + '_lo']: Math.round(res.lo * 10) / 10,
+    [key + '_bs']: -cur,
+  }
+}
+
+// 손/발끝 핸들을 target으로 끌었을 때의 손/발 각도(_ft). e0/tip0은 기준 자세, E는 현재 손목/발목 위치.
+export function footAngleFor(e0: V2, tip0: V2, E: V2, target: V2, up: number, lo: number): number {
+  const th3 = Math.atan2(tip0.y - e0.y, tip0.x - e0.x)
+  return wrap(deg(Math.atan2(target.y - E.y, target.x - E.x) - th3) - up - lo)
+}
+
+// 현재 자세에서 손/발끝의 위치. total = 위+아래+손발 각도(도)
+export function posedTipPos(e0: V2, tip0: V2, E: V2, total: number): V2 {
+  const c = Math.cos(rad(total))
+  const sn = Math.sin(rad(total))
+  const vx = tip0.x - e0.x
+  const vy = tip0.y - e0.y
+  return { x: E.x + vx * c - vy * sn, y: E.y + vx * sn + vy * c }
+}
+
+/* ───────── 부위 색칠 보기 (디버그 시각화) ───────── */
+
+// 부위별 색. 값은 실제 가중치(w, wUp, wEnd)와 보호도(prot, region)에서 그대로 만든다. 임의로 칠하지 않는다.
+const PART_RGB: Record<string, [number, number, number][]> = {
+  // [윗뼈, 아랫뼈, 손/발]
+  armR: [[0.9, 0.22, 0.28], [1, 0.45, 0.45], [1, 0.75, 0.75]],
+  armL: [[0.11, 0.44, 0.88], [0.35, 0.62, 1], [0.66, 0.8, 1]],
+  legR: [[0.16, 0.62, 0.25], [0.35, 0.8, 0.4], [0.7, 0.95, 0.7]],
+  legL: [[0.94, 0.54, 0], [1, 0.7, 0.25], [1, 0.85, 0.6]],
+}
+const REGION_RGB: [number, number, number][] = [[1, 1, 1], [0.56, 0.42, 0.85], [0.5, 0.55, 0.64], [0.63, 0.47, 0.31]] // 없음, 머리, 몸통, 골반·샅
+
+export const PART_LEGEND = [
+  { label: '머리', rgb: REGION_RGB[1] },
+  { label: '몸통', rgb: REGION_RGB[2] },
+  { label: '골반·샅', rgb: REGION_RGB[3] },
+  { label: '오른팔(윗·아래·손)', rgb: PART_RGB.armR[0] },
+  { label: '왼팔(윗·아래·손)', rgb: PART_RGB.armL[0] },
+  { label: '오른다리(허벅지·종아리·발)', rgb: PART_RGB.legR[0] },
+  { label: '왼다리(허벅지·종아리·발)', rgb: PART_RGB.legL[0] },
+]
+
+// 정점당 RGBA. 팔다리는 영향도(w)에 비례해 윗/아랫/손발 뼈 색을 섞고, 남는 고정 가중치는 보호 영역 색으로 칠한다.
+export function partColors(skin: Skin): Float32Array {
+  const { nc, w, wUp, wEnd, prot, region, chains } = skin
+  const n = skin.rest.length / 3
+  const out = new Float32Array(n * 4)
+  for (let k = 0; k < n; k++) {
+    let r = 0
+    let g = 0
+    let b = 0
+    let a = 0
+    let wsum = 0
+    for (let ci = 0; ci < nc; ci++) {
+      const wc = w[k * nc + ci]
+      if (wc <= 0) continue
+      const pal = PART_RGB[chains[ci].key] ?? PART_RGB.armR
+      const wu = wUp[k * nc + ci]
+      const we = wEnd[k * nc + ci]
+      const wl = 1 - wu - we
+      const al = 0.6 * wc
+      r += al * (wu * pal[0][0] + wl * pal[1][0] + we * pal[2][0])
+      g += al * (wu * pal[0][1] + wl * pal[1][1] + we * pal[2][1])
+      b += al * (wu * pal[0][2] + wl * pal[1][2] + we * pal[2][2])
+      a += al
+      wsum += wc
+    }
+    if (region[k] > 0) {
+      const al = 0.45 * prot[k] * Math.max(0, 1 - wsum)
+      const c = REGION_RGB[region[k]]
+      r += al * c[0]
+      g += al * c[1]
+      b += al * c[2]
+      a += al
+    }
+    out[k * 4] = a > 0 ? r / a : 1
+    out[k * 4 + 1] = a > 0 ? g / a : 1
+    out[k * 4 + 2] = a > 0 ? b / a : 1
+    out[k * 4 + 3] = Math.min(0.8, a)
+  }
+  return out
+}
+
+/* ───────── 조작 중 자세 제한 (앱과 체험 페이지가 같이 쓰는 공통 함수) ───────── */
+
+// prev(허용된 자세)에서 cand(원하는 자세)로 가되 (1) 어깨·골반 이동 범위 (2) 늘어남 한도를 넘지 않는 가장 가까운 자세를 돌려준다.
+// 늘어남 판정은 "한도, 또는 조작 전 이미 있던 최대값 중 큰 쪽"을 넘지 않는 것이다. 다른 팔다리가 이미 한도 근처까지 굽어 있어도
+// 지금 움직이는 팔다리가 막히지 않게 하기 위함이다(전체 최대값만 보면 한 팔다리가 다른 팔다리 조작을 막는다).
+export function projectPose(sk: Skin, chains: RestChain[], lim: JointLimits, prev: Angles, cand: Angles, pin?: string): Angles {
+  const scratch = new Float32Array(sk.rest.length)
+  const idx = new Uint32Array(sk.index.length)
+  const c = constrainShift(chains, lim, cand, pin)
+  const limit = limitFor(prev, c, pin)
+  const prevMax = deformSkin(sk, prev, scratch, idx).maxStretch
+  return fitToLimit((a) => deformSkin(sk, a, scratch, idx).maxStretch <= Math.max(limit, prevMax), prev, c)
 }

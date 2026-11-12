@@ -5,7 +5,10 @@ import type { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import { AssetLayer, AssetPanel } from './Assets'
 import type { AssetItem } from './Assets'
-import { buildSkin, deformSkin, makeBody, makeLimits, constrainShift, fitToLimit, withTips, STRETCH_LIMIT } from './meshSkin'
+import {
+  buildSkin, deformSkin, makeBody, makeLimits, projectPose, withTips, partColors, PART_LEGEND,
+  limbRest, solveIK, flipBendAngles, footAngleFor, posedTipPos,
+} from './meshSkin'
 import type { DeformStats } from './meshSkin'
 
 type Pt = { id: number; name: string; x: number; y: number }
@@ -358,55 +361,11 @@ function downloadUrl(name: string, url: string) {
 
 /* ───────────── IK: 끝 점을 끌면 관절이 따라옴 ───────────── */
 
-// 기본 자세(각도 0)일 때의 팔다리 정보 (Three 좌표: y가 위)
+// 기본 자세(각도 0)일 때의 팔다리 정보 (Three 좌표: y가 위). 계산은 meshSkin.ts의 공통 함수를 사용
 function chainRest(pts: Pt[], W: number, H: number, ch: Chain) {
   const get = (id: number) => pts.find((p) => p.id === id)!
   const toW = (p: P) => ({ x: p.x - W / 2, y: H / 2 - p.y })
-  const a = toW(get(ch.ids[0]))
-  const m = toW(get(ch.ids[1]))
-  const e = toW(get(ch.ids[2]))
-  return {
-    a,
-    L1: Math.hypot(m.x - a.x, m.y - a.y),
-    L2: Math.hypot(e.x - m.x, e.y - m.y),
-    th1: Math.atan2(m.y - a.y, m.x - a.x),
-    th2: Math.atan2(e.y - m.y, e.x - m.x),
-  }
-}
-
-// 끝 점을 target에 가져가도록 윗부분/아랫부분 각도 계산
-function solveIK(
-  r: ReturnType<typeof chainRest>,
-  target: P,
-  curUp: number,
-  sign: number,
-) {
-  const { a, L1, L2, th1, th2 } = r
-  const dx = target.x - a.x
-  const dy = target.y - a.y
-  const dist = Math.min(Math.max(Math.hypot(dx, dy), Math.abs(L1 - L2) + 1), L1 + L2 - 1)
-  const beta = Math.atan2(dy, dx)
-  const cosA = (L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist)
-  const alpha = Math.acos(Math.min(1, Math.max(-1, cosA)))
-  const c1 = beta + alpha
-  const c2 = beta - alpha
-
-  let s = sign
-  if (s === 0) {
-    const cur = th1 + toRad(curUp)
-    const far = (x: number) => Math.abs(norm(deg(x - cur)))
-    s = far(c1) < far(c2) ? -1 : 1
-  }
-  const phi1 = s < 0 ? c1 : c2
-  const mx = a.x + L1 * Math.cos(phi1)
-  const my = a.y + L1 * Math.sin(phi1)
-  const tx = a.x + dist * Math.cos(beta)
-  const ty = a.y + dist * Math.sin(beta)
-  const phi2 = Math.atan2(ty - my, tx - mx)
-
-  const up = norm(deg(phi1 - th1))
-  const lo = norm(deg(phi2 - th2) - up)
-  return { up, lo, sign: s }
+  return limbRest(toW(get(ch.ids[0])), toW(get(ch.ids[1])), toW(get(ch.ids[2])))
 }
 
 type AngleSetter = React.Dispatch<React.SetStateAction<Record<string, number>>>
@@ -569,6 +528,7 @@ type MeshBackend = {
     outIndex: Uint32Array,
   ) => DeformStats & { drawCount: number }
   project?: (prev: Record<string, number>, cand: Record<string, number>, pin?: string) => Record<string, number>
+  colors?: Float32Array // 부위 색칠 보기용 정점 RGBA (실제 가중치에서 계산)
 }
 type MeshStats = DeformStats & { ms: number }
 
@@ -577,17 +537,20 @@ function DeformMesh({
   tex,
   angles,
   onStats,
+  showParts,
 }: {
   backend: MeshBackend
   tex: THREE.Texture
   angles: Record<string, number>
   onStats: (s: MeshStats) => void
+  showParts: boolean
 }) {
   const geom = useMemo(() => {
     const g = new THREE.BufferGeometry()
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(backend.rest), 3))
     g.setAttribute('uv', new THREE.BufferAttribute(backend.uv, 2))
     g.setIndex(new THREE.BufferAttribute(new Uint32Array(backend.index), 1))
+    if (backend.colors) g.setAttribute('color', new THREE.BufferAttribute(backend.colors, 4))
     return g
   }, [backend])
   useEffect(() => {
@@ -603,9 +566,17 @@ function DeformMesh({
     geom.computeBoundingSphere()
   }, [geom, backend, angles, onStats])
   return (
-    <mesh geometry={geom} frustumCulled={false}>
-      <meshBasicMaterial map={tex} transparent depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
-    </mesh>
+    <>
+      <mesh geometry={geom} frustumCulled={false}>
+        <meshBasicMaterial map={tex} transparent depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
+      </mesh>
+      {/* 부위 색칠 보기: 같은 변형 메시 위에 반투명으로 덧그림. 화면 표시 전용이며 이미지·저장 데이터에는 영향 없음 */}
+      {showParts && backend.colors && (
+        <mesh geometry={geom} frustumCulled={false} position={[0, 0, 0.02]}>
+          <meshBasicMaterial vertexColors transparent depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+    </>
   )
 }
 
@@ -644,8 +615,8 @@ function JointHandles({
       const e0 = w2(ptsT.find((p) => p.id === def.ids[2])!)
       const t0 = w2(ptsT.find((p) => p.id === def.tipId)!)
       const tot = (angles[ch.key + '_up'] ?? 0) + (angles[ch.key + '_lo'] ?? 0) + (angles[ch.key + '_ft'] ?? 0)
-      const vr = rot({ x: t0.x - e0.x, y: t0.y - e0.y }, tot)
-      arr.push(a.x, a.y, 0, m.x, m.y, 0, m.x, m.y, 0, e.x, e.y, 0, e.x, e.y, 0, e.x + vr.x, e.y + vr.y, 0)
+      const tp = posedTipPos(e0, t0, e, tot)
+      arr.push(a.x, a.y, 0, m.x, m.y, 0, m.x, m.y, 0, e.x, e.y, 0, e.x, e.y, 0, tp.x, tp.y, 0)
     }
     const g = new THREE.BufferGeometry()
     g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3))
@@ -688,14 +659,10 @@ function JointHandles({
         const rel = { x: t.x - dx, y: t.y - dy } // 어깨 이동분을 뺀 기준 좌표
         if (part === 3) {
           // 손/발 뼈: 손목/발목을 피벗으로 손끝/발끝 방향에 맞춰 회전 (아랫뼈와 따로 꺾임)
-          const pw = ptsT
-          const e0 = w2(pw.find((p) => p.id === ch.ids[2])!)
-          const t0 = w2(pw.find((p) => p.id === ch.tipId)!)
-          const th3 = Math.atan2(t0.y - e0.y, t0.x - e0.x)
-          const pc = posedChains(pts, W, H, cur).find((c) => c.key === ch.key)!
-          const E = w2(pc.e)
-          const ang = Math.atan2(t.y - E.y, t.x - E.x)
-          cand[ch.key + '_ft'] = r1(norm(deg(ang - th3) - (cur[ch.key + '_up'] ?? 0) - (cur[ch.key + '_lo'] ?? 0)))
+          const e0 = w2(ptsT.find((p) => p.id === ch.ids[2])!)
+          const t0 = w2(ptsT.find((p) => p.id === ch.tipId)!)
+          const E = w2(posedChains(pts, W, H, cur).find((c) => c.key === ch.key)!.e)
+          cand[ch.key + '_ft'] = r1(footAngleFor(e0, t0, E, t, cur[ch.key + '_up'] ?? 0, cur[ch.key + '_lo'] ?? 0))
         } else if (part === 2) {
           let res = solveIK(r, rel, cur[ch.key + '_up'] ?? 0, sign)
           if (flipFirst) {
@@ -730,9 +697,7 @@ function JointHandles({
         const e0 = w2(ptsT.find((p) => p.id === def.ids[2])!)
         const t0 = w2(ptsT.find((p) => p.id === def.tipId)!)
         const tot = (angles[ch.key + '_up'] ?? 0) + (angles[ch.key + '_lo'] ?? 0) + (angles[ch.key + '_ft'] ?? 0)
-        const vr = rot({ x: t0.x - e0.x, y: t0.y - e0.y }, tot)
-        const E = w2(ch.e)
-        const tipW = { x: E.x + vr.x, y: E.y + vr.y }
+        const tipW = posedTipPos(e0, t0, w2(ch.e), tot)
         return ([0, 1, 2, 3] as const).map((part) => {
           const pw = part === 3 ? tipW : w2(part === 0 ? ch.a : part === 1 ? ch.m : ch.e)
           const id = ch.key + part
@@ -864,6 +829,8 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
   const glEl = useRef<HTMLCanvasElement | null>(null)
   const [selectMode, setSelectMode] = useState(false) // 이미지 영역(파츠) 선택 모드
   const [meshMode, setMeshMode] = useState(false) // 메시 변형 모드 (이미지가 관절을 따라 휨)
+  const [showParts, setShowParts] = useState(false) // 부위 색칠 보기 (디버그 표시)
+  const [capturing, setCapturing] = useState(false) // 화면 저장 중에는 디버그 표시·핸들을 숨김
   const [stats, setStats] = useState<MeshStats>({ folds: 0, maxStretch: 1, overLimit: 0, ms: 0 })
   const [partMsg, setPartMsg] = useState('')
 
@@ -931,7 +898,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
   // 메시 변형용: 원본 이미지(오려낸 파츠 영역은 제외)를 텍스처로 유지하고 자동 가중치 계산
   const backend = useMemo<MeshBackend | null>(() => {
     if (!meshMode) return null
-    const ptsT = withTips(pts) // 손끝·발끝이 없는 옛 포즈 파일은 자동 계산해서 채움
+    const ptsT = withTips(pts, { w: width, h: height }) // 손끝·발끝이 없는 옛 포즈 파일은 자동 계산해서 채움
     const get = (id: number) => ptsT.find((p) => p.id === id)!
     const w2 = (p: P) => ({ x: p.x - width / 2, y: height / 2 - p.y })
     const chains = CHAINS.map((ch) => ({
@@ -952,14 +919,10 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
       rest: sk.rest,
       uv: sk.uv,
       index: sk.index,
+      colors: partColors(sk),
       deform: (a, o, i) => deformSkin(sk, a, o, i),
-      // 조작 중 자세 제한: 어깨·골반 이동 범위 + 늘어남 한도(STRETCH_LIMIT)를 넘지 않는 가장 가까운 자세로 되돌림
-      project: (prev, cand, pin) => {
-        const scratch = new Float32Array(sk.rest.length)
-        const idx = new Uint32Array(sk.index.length)
-        const c = constrainShift(chains, lim, cand, pin)
-        return fitToLimit((a) => deformSkin(sk, a, scratch, idx).maxStretch <= STRETCH_LIMIT, prev, c)
-      },
+      // 조작 중 자세 제한: 어깨·골반 이동 범위 + 늘어남 한도(팔 ×7, 다리 ×5)를 넘지 않는 가장 가까운 자세로 되돌림
+      project: (prev, cand, pin) => projectPose(sk, chains, lim, prev, cand, pin),
     }
   }, [meshMode, pts, width, height, armHW, legHW])
   const meshTex = useMemo(() => (meshMode ? mkTex(rig.src) : null), [meshMode, rig])
@@ -1017,26 +980,22 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
     const ch = CHAINS.find((c) => c.key === key)!
     const r = chainRest(pts, width, height, ch)
     const pc = posedChains(pts, width, height, angles).find((c) => c.key === key)!
-    const dx = angles[key + '_dx'] ?? 0
-    const dy = angles[key + '_dy'] ?? 0
-    const rel = { x: pc.e.x - width / 2 - dx, y: height / 2 - pc.e.y - dy } // 어깨 이동분을 뺀 손목/발목 위치
-    const up0 = angles[key + '_up'] ?? 0
-    const s = Math.sin(r.th2 - r.th1 + toRad(angles[key + '_lo'] ?? 0))
-    const cur = s > 0.05 ? 1 : s < -0.05 ? -1 : angles[key + '_bs'] || solveIK(r, rel, up0, 0).sign
-    const res = solveIK(r, rel, up0, -cur)
-    const cand = {
-      ...angles,
-      [key + '_up']: Math.round(res.up * 10) / 10,
-      [key + '_lo']: Math.round(res.lo * 10) / 10,
-      [key + '_bs']: -cur,
-    }
+    const rel = {
+      x: pc.e.x - width / 2 - (angles[key + '_dx'] ?? 0),
+      y: height / 2 - pc.e.y - (angles[key + '_dy'] ?? 0),
+    } // 어깨 이동분을 뺀 손목/발목 위치
+    const cand = flipBendAngles(r, rel, angles, key)
     setAngles(backend?.project ? backend.project(angles, cand, key) : cand)
   }
 
-  function saveScreen() {
+  async function saveScreen() {
     const c = glEl.current
     if (!c) return
+    // 디버그 표시(부위 색칠, 핸들)가 저장 이미지에 들어가지 않게 잠시 숨기고 저장한다
+    setCapturing(true)
+    await new Promise((r) => setTimeout(r, 150))
     downloadUrl('skela-composite.png', c.toDataURL('image/png'))
+    setCapturing(false)
   }
 
   function savePose() {
@@ -1046,8 +1005,8 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
       points: pts.map((p) => ({
         id: p.id,
         name: p.name,
-        x: Math.round(p.x * 10) / 10,
-        y: Math.round(p.y * 10) / 10,
+        x: p.x, // 반올림하지 않음: 소수 첫째 자리는 불러온 뒤 화면이 달라졌고 셋째 자리도 가장자리 픽셀이 바뀜(측정)
+        y: p.y,
       })),
       links,
       parts: assets
@@ -1100,7 +1059,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
         alert('기본 관절(13개)이 빠진 포즈 파일이에요.')
       } else {
         const ids = new Set<number>(d.points.map((q: Pt) => q.id))
-        onPtsLoad(withTips(d.points))
+        onPtsLoad(withTips(d.points, { w: width, h: height }))
         onLinksLoad(
           Array.isArray(d.links)
             ? d.links.filter((l: [number, number]) => ids.has(l[0]) && ids.has(l[1]))
@@ -1155,8 +1114,8 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
 
             {meshMode && backend && meshTex ? (
               <>
-                <DeformMesh backend={backend} tex={meshTex} angles={angles} onStats={setStats} />
-                <JointHandles pts={pts} W={width} H={height} angles={angles} setAngles={setAngles} project={backend.project} />
+                <DeformMesh backend={backend} tex={meshTex} angles={angles} onStats={setStats} showParts={showParts && !capturing} />
+                {!capturing && <JointHandles pts={pts} W={width} H={height} angles={angles} setAngles={setAngles} project={backend.project} />}
               </>
             ) : (
               <mesh>
@@ -1204,6 +1163,22 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
         <button className={meshMode ? 'btn' : 'btn ghost'} onClick={() => setMeshMode(!meshMode)}>
           {meshMode ? '메시 변형 모드 켜짐 (끄기)' : '메시 변형 모드 켜기'}
         </button>
+        {meshMode && (
+          <label style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <input type="checkbox" checked={showParts} onChange={(e) => setShowParts(e.target.checked)} />
+            부위 색칠 보기 (실제 가중치와 보호 영역)
+          </label>
+        )}
+        {meshMode && showParts && (
+          <div style={{ fontSize: 11, color: '#aaa', display: 'flex', flexWrap: 'wrap', gap: '2px 10px' }}>
+            {PART_LEGEND.map((l) => (
+              <span key={l.label}>
+                <i style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', marginRight: 4, background: `rgb(${l.rgb.map((v) => Math.round(v * 255)).join(',')})` }} />
+                {l.label}
+              </span>
+            ))}
+          </div>
+        )}
         {meshMode && (
           <div className="btns" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {CHAINS.map((ch) => (

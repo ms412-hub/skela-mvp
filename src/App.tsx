@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
 import RigView from './RigView'
+import { normalizeTips } from './meshSkin'
 
 const MP_VERSION = '1.2.0'
 const WASM_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`
@@ -161,11 +162,11 @@ export default function App() {
       }
 
       const lm = result.landmarks[0]
-      const found: Pt[] = JOINTS.map((j) => ({
+      const found: Pt[] = normalizeTips(JOINTS.map((j) => ({
         ...j,
         x: lm[j.id].x * canvas.width,
         y: lm[j.id].y * canvas.height,
-      }))
+      })), { w: canvas.width, h: canvas.height })
       originalRef.current = found.map((p) => ({ ...p }))
       setPts(found)
       setLinks([])

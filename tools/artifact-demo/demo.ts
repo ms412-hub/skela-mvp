@@ -1,6 +1,9 @@
-// Skela 메시 변형 체험 페이지의 로직. 앱의 src/meshSkin.ts, src/experimental/meshSkinMulti.ts를 그대로 사용한다.
+// Skela 메시 변형 체험 페이지의 로직. 계산은 앱과 같은 src/meshSkin.ts를 그대로 사용한다(복사하지 않음).
 import * as THREE from 'three'
-import { buildSkin, deformSkin, makeBody, makeLimits, constrainShift, fitToLimit, STRETCH_LIMIT } from '../../src/meshSkin'
+import {
+  buildSkin, deformSkin, makeBody, makeLimits, projectPose, partColors,
+  limbRest, solveIK, flipBendAngles, footAngleFor, posedTipPos,
+} from '../../src/meshSkin'
 import type { RestChain } from '../../src/meshSkin'
 import { buildSkin as buildLegacy, deformSkin as deformLegacy } from './legacy/meshSkinLegacy'
 
@@ -9,16 +12,15 @@ type Data = Record<string, { w: number; h: number; img: string; points: { id: nu
 const DATA: Data = JSON.parse(document.getElementById('skela-data')!.textContent!)
 
 const CHAINS = [
-  { key: 'armR', ids: [12, 14, 16], kind: 'arm', color: '#e63946' },
-  { key: 'armL', ids: [11, 13, 15], kind: 'arm', color: '#1d6fe0' },
-  { key: 'legR', ids: [24, 26, 28], kind: 'leg', color: '#2a9d3f' },
-  { key: 'legL', ids: [23, 25, 27], kind: 'leg', color: '#f08a00' },
+  { key: 'armR', ids: [12, 14, 16], tipId: 20, kind: 'arm', color: '#e63946', label: '오른팔' },
+  { key: 'armL', ids: [11, 13, 15], tipId: 19, kind: 'arm', color: '#1d6fe0', label: '왼팔' },
+  { key: 'legR', ids: [24, 26, 28], tipId: 32, kind: 'leg', color: '#2a9d3f', label: '오른다리' },
+  { key: 'legL', ids: [23, 25, 27], tipId: 31, kind: 'leg', color: '#f08a00', label: '왼다리' },
 ] as const
 const ARM_HW = 30
 const LEG_HW = 40
 const norm = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180
 const toRad = (d: number) => (d * Math.PI) / 180
-const deg = (r: number) => (r * 180) / Math.PI
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 
 type Angles = Record<string, number>
@@ -28,12 +30,13 @@ type Backend = {
   index: Uint32Array
   deform: (a: Angles, o: Float32Array, i: Uint32Array) => { folds: number; maxStretch: number; over: number; drawCount: number }
   project?: (prev: Angles, cand: Angles, pin?: string) => Angles
+  colors?: Float32Array
 }
 
 let who = 'girl'
 let algo: 'fixed' | 'legacy' = 'fixed'
 let angles: Angles = {}
-let showMesh = false
+let showParts = false
 let W = 0
 let H = 0
 let rest: Record<number, P> = {}
@@ -41,7 +44,7 @@ let backend: Backend
 let geom: THREE.BufferGeometry
 let tex: THREE.Texture
 let mesh: THREE.Mesh
-let wire: THREE.Mesh
+let paint: THREE.Mesh
 
 const stage = $('stage')
 const gl = $('gl') as HTMLCanvasElement
@@ -52,50 +55,18 @@ const scene = new THREE.Scene()
 const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10)
 cam.position.z = 5
 
-/* ───── 수학 (RigView의 chainRest / solveIK / posedChains와 같은 규약) ───── */
 const w2 = (p: P): P => ({ x: p.x - W / 2, y: H / 2 - p.y })
-function chainRest(ids: readonly number[]) {
-  const a = w2(rest[ids[0]])
-  const m = w2(rest[ids[1]])
-  const e = w2(rest[ids[2]])
-  return {
-    a,
-    L1: Math.hypot(m.x - a.x, m.y - a.y),
-    L2: Math.hypot(e.x - m.x, e.y - m.y),
-    th1: Math.atan2(m.y - a.y, m.x - a.x),
-    th2: Math.atan2(e.y - m.y, e.x - m.x),
-  }
-}
-function solveIK(r: ReturnType<typeof chainRest>, target: P, curUp: number, sign: number) {
-  const { a, L1, L2, th1, th2 } = r
-  const dx = target.x - a.x
-  const dy = target.y - a.y
-  const dist = Math.min(Math.max(Math.hypot(dx, dy), Math.abs(L1 - L2) + 1), L1 + L2 - 1)
-  const beta = Math.atan2(dy, dx)
-  const cosA = (L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist)
-  const alpha = Math.acos(Math.min(1, Math.max(-1, cosA)))
-  const c1 = beta + alpha
-  const c2 = beta - alpha
-  let s = sign
-  if (s === 0) {
-    const cur = th1 + toRad(curUp)
-    const far = (x: number) => Math.abs(norm(deg(x - cur)))
-    s = far(c1) < far(c2) ? -1 : 1
-  }
-  const phi1 = s < 0 ? c1 : c2
-  const mx = a.x + L1 * Math.cos(phi1)
-  const my = a.y + L1 * Math.sin(phi1)
-  const phi2 = Math.atan2(a.y + dist * Math.sin(beta) - my, a.x + dist * Math.cos(beta) - mx)
-  const up = norm(deg(phi1 - th1))
-  return { up, lo: norm(deg(phi2 - th2) - up), sign: s }
-}
-// 현재 자세의 관절 위치(세계 좌표)
+const restOf = (ch: (typeof CHAINS)[number]) => limbRest(w2(rest[ch.ids[0]]), w2(rest[ch.ids[1]]), w2(rest[ch.ids[2]]))
+const tip0 = (ch: (typeof CHAINS)[number]) => w2(rest[ch.tipId])
+
+// 현재 자세의 관절 위치(세계 좌표). 어깨 이동, 위/아래 각도 반영
 function posed(ch: (typeof CHAINS)[number]) {
   const a0 = w2(rest[ch.ids[0]])
   const m0 = w2(rest[ch.ids[1]])
   const e0 = w2(rest[ch.ids[2]])
   const up = angles[ch.key + '_up'] ?? 0
   const lo = angles[ch.key + '_lo'] ?? 0
+  const ft = angles[ch.key + '_ft'] ?? 0
   const a = { x: a0.x + (angles[ch.key + '_dx'] ?? 0), y: a0.y + (angles[ch.key + '_dy'] ?? 0) }
   const rot = (v: P, d: number): P => ({
     x: v.x * Math.cos(toRad(d)) - v.y * Math.sin(toRad(d)),
@@ -104,7 +75,8 @@ function posed(ch: (typeof CHAINS)[number]) {
   const vm = rot({ x: m0.x - a0.x, y: m0.y - a0.y }, up)
   const m = { x: a.x + vm.x, y: a.y + vm.y }
   const ve = rot({ x: e0.x - m0.x, y: e0.y - m0.y }, up + lo)
-  return { a, m, e: { x: m.x + ve.x, y: m.y + ve.y } }
+  const e = { x: m.x + ve.x, y: m.y + ve.y }
+  return { a, m, e, tip: posedTipPos(e0, tip0(ch), e, up + lo + ft) }
 }
 
 /* ───── 메시 구성 ───── */
@@ -116,12 +88,14 @@ function chainsRest(): RestChain[] {
     e: w2(rest[c.ids[2]]),
     hw: c.kind === 'arm' ? ARM_HW : LEG_HW,
     ext: c.kind === 'arm' ? 45 : 40,
+    tip: w2(rest[c.tipId]),
+    hwEnd: c.kind === 'arm' ? ARM_HW * 1.2 : LEG_HW * 1.5,
   }))
 }
 function makeBackend(): Backend {
   const chains = chainsRest()
   if (algo === 'legacy') {
-    // 수정 전: 머리·몸통 보호 없음, 4배 넘게 늘어난 삼각형은 숨김
+    // 수정 전: 머리·몸통 보호 없음, 손/발 뼈 없음, 4배 넘게 늘어난 삼각형은 숨김
     const sk = buildLegacy(chains, W, H)
     return {
       rest: sk.rest, uv: sk.uv, index: sk.index,
@@ -132,12 +106,9 @@ function makeBackend(): Backend {
   const sk = buildSkin(chains, W, H, 12, body)
   const lim = makeLimits((id) => w2(rest[id]))
   return {
-    project: (prev, cand, pin) => {
-      const scratch = new Float32Array(sk.rest.length)
-      const idx = new Uint32Array(sk.index.length)
-      return fitToLimit((a) => deformSkin(sk, a, scratch, idx).maxStretch <= STRETCH_LIMIT, prev, constrainShift(chains, lim, cand, pin))
-    },
+    project: (prev, cand, pin) => projectPose(sk, chains, lim, prev, cand, pin),
     rest: sk.rest, uv: sk.uv, index: sk.index,
+    colors: partColors(sk),
     deform: (a, o, i) => { const r = deformSkin(sk, a, o, i); return { folds: r.folds, maxStretch: r.maxStretch, over: r.overLimit, drawCount: r.drawCount } },
   }
 }
@@ -148,8 +119,10 @@ function rebuild() {
   geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(backend.rest), 3))
   geom.setAttribute('uv', new THREE.BufferAttribute(backend.uv, 2))
   geom.setIndex(new THREE.BufferAttribute(new Uint32Array(backend.index), 1))
+  if (backend.colors) geom.setAttribute('color', new THREE.BufferAttribute(backend.colors, 4))
   mesh.geometry = geom
-  wire.geometry = geom
+  paint.geometry = geom
+  paint.visible = showParts && !!backend.colors
   update()
 }
 function loadCharacter(name: string) {
@@ -196,31 +169,33 @@ function update() {
   $('s-folds').textContent = String(r.folds)
   $('s-stretch').textContent = '×' + fmt(r.maxStretch, 2)
   $('s-hidden').textContent = String(r.over)
-  $('l-hidden').textContent = algo === 'legacy' ? '숨긴 삼각형' : '한도(×' + STRETCH_LIMIT + ') 넘게 늘어난 삼각형'
+  $('l-hidden').textContent = algo === 'legacy' ? '숨긴 삼각형' : '한도(팔 ×7 / 다리 ×5) 넘게 늘어난 삼각형'
   $('s-ms').textContent = fmt(ms, 1) + ' ms'
 }
 function drawOverlay() {
   const k = ov.width / W
   octx.clearRect(0, 0, ov.width, ov.height)
+  if (capturing) return
   const X = (p: P) => (p.x + W / 2) * k
   const Y = (p: P) => (H / 2 - p.y) * k
   const R = Math.max(7, 11 * (ov.width / 700))
   octx.lineWidth = Math.max(1.5, R / 5)
   for (const ch of CHAINS) {
-    const { a, m, e } = posed(ch)
+    const s = posed(ch)
     octx.strokeStyle = 'rgba(255,255,255,.92)'
     octx.shadowColor = 'rgba(0,0,0,.55)'
     octx.shadowBlur = 3
     octx.beginPath()
-    octx.moveTo(X(a), Y(a))
-    octx.lineTo(X(m), Y(m))
-    octx.lineTo(X(e), Y(e))
+    octx.moveTo(X(s.a), Y(s.a))
+    octx.lineTo(X(s.m), Y(s.m))
+    octx.lineTo(X(s.e), Y(s.e))
+    octx.lineTo(X(s.tip), Y(s.tip))
     octx.stroke()
     octx.shadowBlur = 0
-    ;([[a, '#ffd23f'], [m, '#ffffff'], [e, ch.color]] as [P, string][]).forEach(([p, c], i) => {
+    ;([[s.a, '#ffd23f'], [s.m, '#ffffff'], [s.e, ch.color], [s.tip, '#c77dff']] as [P, string][]).forEach(([p, c], i) => {
       const on = active && active.key === ch.key && active.part === i
       octx.beginPath()
-      octx.arc(X(p), Y(p), on ? R * 1.35 : R, 0, Math.PI * 2)
+      octx.arc(X(p), Y(p), (on ? 1.35 : 1) * (i === 3 ? R * 0.75 : R), 0, Math.PI * 2)
       octx.fillStyle = c
       octx.fill()
       octx.strokeStyle = 'rgba(0,0,0,.65)'
@@ -244,7 +219,8 @@ function resize() {
 }
 
 /* ───── 직접 드래그 ───── */
-let active: { key: string; part: 0 | 1 | 2; sign: number; offX: number; offY: number } | null = null
+let capturing = false
+let active: { key: string; part: 0 | 1 | 2 | 3; sign: number; flipFirst: boolean; offX: number; offY: number } | null = null
 const r1 = (v: number) => Math.round(v * 10) / 10
 function toWorld(e: PointerEvent): P {
   const r = ov.getBoundingClientRect()
@@ -253,45 +229,50 @@ function toWorld(e: PointerEvent): P {
 ov.addEventListener('pointerdown', (e) => {
   const q = toWorld(e)
   const reach = Math.max(18, W / 26)
-  let best: { key: string; part: 0 | 1 | 2; d: number; p: P } | null = null
+  let best: { key: string; part: 0 | 1 | 2 | 3; d: number; p: P } | null = null
   for (const ch of CHAINS) {
     const s = posed(ch)
-    ;([[2, s.e], [1, s.m], [0, s.a]] as [0 | 1 | 2, P][]).forEach(([part, p]) => {
+    ;([[3, s.tip], [2, s.e], [1, s.m], [0, s.a]] as [0 | 1 | 2 | 3, P][]).forEach(([part, p]) => {
       const d = Math.hypot(p.x - q.x, p.y - q.y)
       if (d < reach && (!best || d < best.d)) best = { key: ch.key, part, d, p }
     })
   }
   if (!best) return
-  const b = best as { key: string; part: 0 | 1 | 2; d: number; p: P }
+  const b = best as { key: string; part: 0 | 1 | 2 | 3; d: number; p: P }
   const ch = CHAINS.find((c) => c.key === b.key)!
-  const r = chainRest(ch.ids)
+  const r = restOf(ch)
   const s0 = Math.sin(r.th2 - r.th1 + toRad(angles[b.key + '_lo'] ?? 0))
-  active = { key: b.key, part: b.part, sign: s0 > 0.05 ? 1 : s0 < -0.05 ? -1 : 0, offX: b.p.x - q.x, offY: b.p.y - q.y }
+  let sign = s0 > 0.05 ? 1 : s0 < -0.05 ? -1 : angles[b.key + '_bs'] || 0
+  const shift = e.shiftKey && b.part === 2 // Shift: 굽힘 방향 반대(ㄴ ↔ ㄱ)
+  if (shift && sign !== 0) sign = -sign
+  active = { key: b.key, part: b.part, sign, flipFirst: shift && sign === 0, offX: b.p.x - q.x, offY: b.p.y - q.y }
   ov.setPointerCapture(e.pointerId)
   update()
 })
 ov.addEventListener('pointermove', (e) => {
-  if (!active) {
-    ov.style.cursor = 'default'
-    return
-  }
+  if (!active) return
   const q = toWorld(e)
   const t = { x: q.x + active.offX, y: q.y + active.offY }
   const ch = CHAINS.find((c) => c.key === active!.key)!
-  const r = chainRest(ch.ids)
+  const r = restOf(ch)
   const cand = { ...angles }
   if (active.part === 0) {
     cand[ch.key + '_dx'] = r1(t.x - r.a.x)
     cand[ch.key + '_dy'] = r1(t.y - r.a.y)
+  } else if (active.part === 3) {
+    const E = posed(ch).e
+    cand[ch.key + '_ft'] = r1(footAngleFor(w2(rest[ch.ids[2]]), tip0(ch), E, t, angles[ch.key + '_up'] ?? 0, angles[ch.key + '_lo'] ?? 0))
   } else {
     const rel = { x: t.x - (angles[ch.key + '_dx'] ?? 0), y: t.y - (angles[ch.key + '_dy'] ?? 0) }
     if (active.part === 2) {
-      const res = solveIK(r, rel, angles[ch.key + '_up'] ?? 0, active.sign)
+      let res = solveIK(r, rel, angles[ch.key + '_up'] ?? 0, active.sign)
+      if (active.flipFirst) res = solveIK(r, rel, angles[ch.key + '_up'] ?? 0, -res.sign)
       active.sign = res.sign
       cand[ch.key + '_up'] = r1(res.up)
       cand[ch.key + '_lo'] = r1(res.lo)
+      cand[ch.key + '_bs'] = res.sign
     } else {
-      cand[ch.key + '_up'] = r1(norm(deg(Math.atan2(rel.y - r.a.y, rel.x - r.a.x) - r.th1)))
+      cand[ch.key + '_up'] = r1(norm(((Math.atan2(rel.y - r.a.y, rel.x - r.a.x) - r.th1) * 180) / Math.PI))
     }
   }
   angles = backend.project ? backend.project(angles, cand, ch.key) : cand
@@ -305,10 +286,17 @@ ov.addEventListener('pointerup', endDrag)
 ov.addEventListener('pointercancel', endDrag)
 
 /* ───── 버튼 ───── */
+function flip(key: string) {
+  const ch = CHAINS.find((c) => c.key === key)!
+  const s = posed(ch)
+  const rel = { x: s.e.x - (angles[key + '_dx'] ?? 0), y: s.e.y - (angles[key + '_dy'] ?? 0) }
+  const cand = flipBendAngles(restOf(ch), rel, angles, key)
+  angles = backend.project ? backend.project(angles, cand, key) : cand
+  update()
+}
 function ikTo(key: string, target: P) {
   const ch = CHAINS.find((c) => c.key === key)!
-  const r = chainRest(ch.ids)
-  const res = solveIK(r, target, 0, 0)
+  const res = solveIK(restOf(ch), target, 0, 0)
   angles[key + '_up'] = r1(res.up)
   angles[key + '_lo'] = r1(res.lo)
 }
@@ -322,6 +310,8 @@ function preset(name: string) {
   if (name === 'leg') ikTo('legR', { x: an.x - 130, y: an.y + 150 })
   if (name === 'extreme') ikTo('armR', { x: W * 0.12, y: H / 2 - H * 0.2 })
   if (name === 'cross') ikTo('legR', { x: an.x + 140, y: an.y + 40 })
+  if (name === 'hand') { ikTo('armR', { x: e.x, y: e.y + L }); angles['armR_ft'] = 50 }
+  if (name === 'foot') { ikTo('legR', { x: an.x - 20, y: an.y + 60 }); angles['legR_ft'] = -40 }
   if (backend.project) angles = backend.project({}, angles)
   update()
 }
@@ -345,9 +335,11 @@ $('reset').addEventListener('click', () => {
   update()
 })
 document.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((b) => b.addEventListener('click', () => preset(b.dataset.preset!)))
-$<HTMLInputElement>('wire').addEventListener('change', (e) => {
-  showMesh = (e.target as HTMLInputElement).checked
-  wire.visible = showMesh
+document.querySelectorAll<HTMLButtonElement>('[data-flip]').forEach((b) => b.addEventListener('click', () => flip(b.dataset.flip!)))
+$<HTMLInputElement>('parts').addEventListener('change', (e) => {
+  showParts = (e.target as HTMLInputElement).checked
+  paint.visible = showParts && !!backend.colors
+  $('legend-parts').hidden = !showParts
   update()
 })
 
@@ -355,18 +347,22 @@ $<HTMLInputElement>('wire').addEventListener('change', (e) => {
 ;(window as unknown as Record<string, unknown>).__skela = {
   set: (a: Angles) => { angles = backend.project ? backend.project({}, a) : a; update() },
   raw: (a: Angles) => { angles = a; update() },
+  get: () => ({ ...angles }),
   algo: (v: string) => { algo = v as 'fixed' | 'legacy'; rebuild() },
   who: (v: string) => loadCharacter(v),
+  flip: (k: string) => flip(k),
+  parts: (on: boolean) => { showParts = on; paint.visible = on && !!backend.colors; update() },
+  capture: (on: boolean) => { capturing = on; update() },
 }
 
 /* ───── 시작 ───── */
 mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, toneMapped: false }))
 mesh.frustumCulled = false
-wire = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0x6d4aff, wireframe: true, transparent: true, opacity: 0.35, toneMapped: false }))
-wire.frustumCulled = false
-wire.visible = false
-wire.position.z = 0.1
-scene.add(mesh, wire)
+paint = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }))
+paint.frustumCulled = false
+paint.visible = false
+paint.position.z = 0.02
+scene.add(mesh, paint)
 renderer.setClearColor(0xffffff, 1)
 new ResizeObserver(resize).observe(stage)
 loadCharacter(who)
