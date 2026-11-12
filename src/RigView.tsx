@@ -1,9 +1,12 @@
 import { getApiKey, setStoredApiKey, generateInpaintWithGemini } from './gemini'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
+import type { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import { AssetLayer, AssetPanel } from './Assets'
 import type { AssetItem } from './Assets'
+import { buildSkin, deformSkin } from './meshSkin'
+import type { DeformStats, Skin } from './meshSkin'
 
 type Pt = { id: number; name: string; x: number; y: number }
 type P = { x: number; y: number }
@@ -211,11 +214,13 @@ function posedChains(pts: Pt[], W: number, H: number, angles: Record<string, num
     const e = toW(get(ch.ids[2]))
     const up = angles[ch.key + '_up'] ?? 0
     const lo = angles[ch.key + '_lo'] ?? 0
+    // 메시 모드에서 윗관절(어깨/골반)을 직접 끌면 생기는 평행이동 (세계 좌표, y 위)
+    const a2 = { x: a.x + (angles[ch.key + '_dx'] ?? 0), y: a.y + (angles[ch.key + '_dy'] ?? 0) }
     const vm = rot({ x: m.x - a.x, y: m.y - a.y }, up)
-    const m2 = { x: a.x + vm.x, y: a.y + vm.y }
+    const m2 = { x: a2.x + vm.x, y: a2.y + vm.y }
     const ve = rot({ x: e.x - m.x, y: e.y - m.y }, up + lo)
     const e2 = { x: m2.x + ve.x, y: m2.y + ve.y }
-    return { key: ch.key, a: toI(a), m: toI(m2), e: toI(e2) }
+    return { key: ch.key, a: toI(a2), m: toI(m2), e: toI(e2) }
   })
 }
 
@@ -231,7 +236,7 @@ function posedPoints(
   const cur = new Map(rest)
   const disp = new Map<number, P>()
   for (const ch of posedChains(pts, W, H, angles)) {
-    for (const [i, q] of [[1, ch.m], [2, ch.e]] as const) {
+    for (const [i, q] of [[0, ch.a], [1, ch.m], [2, ch.e]] as const) {
       const id = CHAINS.find((c) => c.key === ch.key)!.ids[i]
       const r = rest.get(id)!
       cur.set(id, q)
@@ -486,7 +491,10 @@ function GuideEditor({
     const d = drag.current
     if (!d) return
     const { x, y } = toCanvas(e)
-    const target = { x: x - W / 2, y: H / 2 - y }
+    const target = {
+      x: x - W / 2 - (angles[d.key + '_dx'] ?? 0),
+      y: H / 2 - y - (angles[d.key + '_dy'] ?? 0),
+    }
     const chain = CHAINS.find((c) => c.key === d.key)!
     const r = chainRest(pts, W, H, chain)
 
@@ -527,12 +535,12 @@ function GuideEditor({
 
 type LimbData = ReturnType<typeof buildRig>['limbs'][number]
 
-function Limb({ data, upDeg, loDeg }: { data: LimbData; upDeg: number; loDeg: number }) {
+function Limb({ data, upDeg, loDeg, dx = 0, dy = 0 }: { data: LimbData; upDeg: number; loDeg: number; dx?: number; dy?: number }) {
   const upTex = useMemo(() => mkTex(data.up.canvas), [data])
   const loTex = useMemo(() => mkTex(data.lo.canvas), [data])
 
   return (
-    <group position={[data.pivotA.x, data.pivotA.y, 0.1]} rotation={[0, 0, toRad(upDeg)]}>
+    <group position={[data.pivotA.x + dx, data.pivotA.y + dy, 0.1]} rotation={[0, 0, toRad(upDeg)]}>
       <mesh position={[data.up.off.x, data.up.off.y, 0]}>
         <planeGeometry args={[data.up.bw, data.up.bh]} />
         <meshBasicMaterial map={upTex} transparent depthWrite={false} toneMapped={false} />
@@ -544,6 +552,151 @@ function Limb({ data, upDeg, loDeg }: { data: LimbData; upDeg: number; loDeg: nu
         </mesh>
       </group>
     </group>
+  )
+}
+
+/* ───────────── 메시 변형 모드: 이미지 전체를 하나의 메시로 휘게 함 ───────────── */
+
+function DeformMesh({
+  skin,
+  tex,
+  angles,
+  onStats,
+}: {
+  skin: Skin
+  tex: THREE.Texture
+  angles: Record<string, number>
+  onStats: (s: DeformStats) => void
+}) {
+  const geom = useMemo(() => {
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(skin.rest), 3))
+    g.setAttribute('uv', new THREE.BufferAttribute(skin.uv, 2))
+    g.setIndex(new THREE.BufferAttribute(new Uint32Array(skin.index), 1))
+    return g
+  }, [skin])
+  useEffect(() => {
+    const pos = geom.getAttribute('position') as THREE.BufferAttribute
+    const idx = geom.getIndex()!
+    const r = deformSkin(skin, angles, pos.array as Float32Array, idx.array as Uint32Array)
+    idx.needsUpdate = true
+    geom.setDrawRange(0, r.drawCount)
+    onStats({ folds: r.folds, maxStretch: r.maxStretch, hidden: r.hidden })
+    pos.needsUpdate = true
+    geom.computeBoundingSphere()
+  }, [geom, skin, angles, onStats])
+  return (
+    <mesh geometry={geom} frustumCulled={false}>
+      <meshBasicMaterial map={tex} transparent depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
+    </mesh>
+  )
+}
+
+// 관절 핸들: 어깨/골반 = 팔다리 통째 이동, 팔꿈치/무릎 = 굽히기, 손목/발목 = IK
+function JointHandles({
+  pts,
+  W,
+  H,
+  angles,
+  setAngles,
+}: {
+  pts: Pt[]
+  W: number
+  H: number
+  angles: Record<string, number>
+  setAngles: AngleSetter
+}) {
+  const { camera, gl } = useThree()
+  const anglesRef = useRef(angles)
+  anglesRef.current = angles
+  const posed = useMemo(() => posedChains(pts, W, H, angles), [pts, W, H, angles])
+  const [active, setActive] = useState<string | null>(null)
+  const rr = Math.max(10, W / 60)
+  const w2 = (p: P) => ({ x: p.x - W / 2, y: H / 2 - p.y })
+
+  const bones = useMemo(() => {
+    const arr: number[] = []
+    for (const ch of posed) {
+      const a = w2(ch.a)
+      const m = w2(ch.m)
+      const e = w2(ch.e)
+      arr.push(a.x, a.y, 0, m.x, m.y, 0, m.x, m.y, 0, e.x, e.y, 0)
+    }
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3))
+    return new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xffffff }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [posed])
+
+  function toWorld(cx: number, cy: number) {
+    const r = gl.domElement.getBoundingClientRect()
+    const zoom = (camera as THREE.OrthographicCamera).zoom
+    return { x: (cx - r.left - r.width / 2) / zoom, y: -(cy - r.top - r.height / 2) / zoom }
+  }
+
+  function begin(ch: Chain, part: 0 | 1 | 2, hx: number, hy: number, e: ThreeEvent<PointerEvent>) {
+    e.stopPropagation()
+    const p0 = toWorld(e.nativeEvent.clientX, e.nativeEvent.clientY)
+    const off = { x: hx - p0.x, y: hy - p0.y } // 잡은 위치와 점 중심의 차이 (튀지 않게)
+    const r = chainRest(pts, W, H, ch)
+    const s0 = Math.sin(r.th2 - r.th1 + toRad(anglesRef.current[ch.key + '_lo'] ?? 0))
+    let sign = s0 > 0.05 ? 1 : s0 < -0.05 ? -1 : 0
+    const id = ch.key + part
+    setActive(id)
+    const r1 = (v: number) => Math.round(v * 10) / 10
+
+    const move = (ev: PointerEvent) => {
+      const q = toWorld(ev.clientX, ev.clientY)
+      const t = { x: q.x + off.x, y: q.y + off.y }
+      if (part === 0) {
+        setAngles((prev) => ({ ...prev, [ch.key + '_dx']: r1(t.x - r.a.x), [ch.key + '_dy']: r1(t.y - r.a.y) }))
+        return
+      }
+      const dx = anglesRef.current[ch.key + '_dx'] ?? 0
+      const dy = anglesRef.current[ch.key + '_dy'] ?? 0
+      const rel = { x: t.x - dx, y: t.y - dy } // 어깨 이동분을 뺀 기준 좌표
+      if (part === 2) {
+        const res = solveIK(r, rel, anglesRef.current[ch.key + '_up'] ?? 0, sign)
+        sign = res.sign
+        setAngles((prev) => ({ ...prev, [ch.key + '_up']: r1(res.up), [ch.key + '_lo']: r1(res.lo) }))
+      } else {
+        const up = norm(deg(Math.atan2(rel.y - r.a.y, rel.x - r.a.x) - r.th1))
+        setAngles((prev) => ({ ...prev, [ch.key + '_up']: r1(up) }))
+      }
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setActive(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  return (
+    <>
+      <primitive object={bones} position={[0, 0, 0.8]} />
+      {posed.map((ch) => {
+        const def = CHAINS.find((c) => c.key === ch.key)!
+        return ([0, 1, 2] as const).map((part) => {
+          const pw = w2(part === 0 ? ch.a : part === 1 ? ch.m : ch.e)
+          const id = ch.key + part
+          const on = active === id
+          return (
+            <mesh
+              key={id}
+              position={[pw.x, pw.y, 0.95]}
+              onPointerDown={(e) => begin(def, part, pw.x, pw.y, e)}
+              onPointerOver={() => (gl.domElement.style.cursor = 'pointer')}
+              onPointerOut={() => (gl.domElement.style.cursor = '')}
+            >
+              <circleGeometry args={[on ? rr * 1.4 : rr, 24]} />
+              <meshBasicMaterial color={part === 2 ? LIMB_COLORS[ch.key] : part === 0 ? '#ffd23f' : '#ffffff'} toneMapped={false} />
+            </mesh>
+          )
+        })
+      })}
+    </>
   )
 }
 
@@ -655,6 +808,8 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
   const [selAsset, setSelAsset] = useState<number | null>(null)
   const glEl = useRef<HTMLCanvasElement | null>(null)
   const [selectMode, setSelectMode] = useState(false) // 이미지 영역(파츠) 선택 모드
+  const [meshMode, setMeshMode] = useState(false) // 메시 변형 모드 (이미지가 관절을 따라 휨)
+  const [stats, setStats] = useState<DeformStats>({ folds: 0, maxStretch: 1, hidden: 0 })
   const [partMsg, setPartMsg] = useState('')
 
    // Gemini API 연동 State 및 함수
@@ -717,6 +872,26 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
     [img, width, height, pts, armHW, legHW, polyKey],
   )
   const baseTex = useMemo(() => mkTex(rig.base), [rig])
+
+  // 메시 변형용: 원본 이미지(오려낸 파츠 영역은 제외)를 텍스처로 유지하고 자동 가중치 계산
+  const skin = useMemo(() => {
+    if (!meshMode) return null
+    const get = (id: number) => pts.find((p) => p.id === id)!
+    const w2 = (p: P) => ({ x: p.x - width / 2, y: height / 2 - p.y })
+    return buildSkin(
+      CHAINS.map((ch) => ({
+        key: ch.key,
+        a: w2(get(ch.ids[0])),
+        m: w2(get(ch.ids[1])),
+        e: w2(get(ch.ids[2])),
+        hw: ch.kind === 'arm' ? armHW : legHW,
+        ext: ch.kind === 'arm' ? HAND_EXTEND : FOOT_EXTEND,
+      })),
+      width,
+      height,
+    )
+  }, [meshMode, pts, width, height, armHW, legHW])
+  const meshTex = useMemo(() => (meshMode ? mkTex(rig.src) : null), [meshMode, rig])
 
   const guideUrl = useMemo(
     () => renderGuide(pts, width, height, angles, links).toDataURL('image/png'),
@@ -886,17 +1061,26 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
             <color attach="background" args={[rig.bg]} />
             <FitCamera w={width} h={height} />
 
-            <mesh>
-              <planeGeometry args={[width, height]} />
-              <meshBasicMaterial map={baseTex} transparent depthWrite={false} toneMapped={false} />
-            </mesh>
+            {meshMode && skin && meshTex ? (
+              <>
+                <DeformMesh skin={skin} tex={meshTex} angles={angles} onStats={setStats} />
+                <JointHandles pts={pts} W={width} H={height} angles={angles} setAngles={setAngles} />
+              </>
+            ) : (
+              <mesh>
+                <planeGeometry args={[width, height]} />
+                <meshBasicMaterial map={baseTex} transparent depthWrite={false} toneMapped={false} />
+              </mesh>
+            )}
 
-            {rig.limbs.map((l) => (
+            {!meshMode && rig.limbs.map((l) => (
               <Limb
                 key={l.key}
                 data={l}
                 upDeg={angles[l.key + '_up'] ?? 0}
                 loDeg={angles[l.key + '_lo'] ?? 0}
+                dx={angles[l.key + '_dx'] ?? 0}
+                dy={angles[l.key + '_dy'] ?? 0}
               />
             ))}
 
@@ -924,6 +1108,17 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
       </div>
 
       <div className="rig-panel">
+        <div className="panel-title">메시 변형 (실험) — 그림 위 관절점을 직접 드래그</div>
+        <button className={meshMode ? 'btn' : 'btn ghost'} onClick={() => setMeshMode(!meshMode)}>
+          {meshMode ? '메시 변형 모드 켜짐 (끄기)' : '메시 변형 모드 켜기'}
+        </button>
+        {meshMode && (
+          <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.5 }}>
+            노란 점=어깨/골반(통째 이동) · 흰 점=팔꿈치/무릎(굽히기) · 색 점=손목/발목(IK). 영향 범위는 아래 팔/다리 폭 슬라이더.
+            <br />
+            뒤집힌 삼각형 {stats.folds}개 · 최대 늘어남 ×{stats.maxStretch.toFixed(2)} · 숨긴 삼각형 {stats.hidden}개
+          </div>
+        )}
         <div className="panel-title">자세 잡기 (손목·발목·팔꿈치·무릎 점을 끌어보세요)</div>
         <GuideEditor
           pts={pts}
