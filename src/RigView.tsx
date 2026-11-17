@@ -568,12 +568,13 @@ function DeformMesh({
   return (
     <>
       <mesh geometry={geom} frustumCulled={false}>
-        <meshBasicMaterial map={tex} transparent depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
+        {/* FrontSide: 접혀 뒤집힌 삼각형(천의 뒷면)은 그리지 않는다. 그리는 순서는 deformSkin이 이동량 순으로 정렬해 준다 */}
+        <meshBasicMaterial map={tex} transparent depthWrite={false} toneMapped={false} side={THREE.FrontSide} />
       </mesh>
       {/* 부위 색칠 보기: 같은 변형 메시 위에 반투명으로 덧그림. 화면 표시 전용이며 이미지·저장 데이터에는 영향 없음 */}
       {showParts && backend.colors && (
         <mesh geometry={geom} frustumCulled={false} position={[0, 0, 0.02]}>
-          <meshBasicMaterial vertexColors transparent depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
+          <meshBasicMaterial vertexColors transparent depthWrite={false} toneMapped={false} side={THREE.FrontSide} />
         </mesh>
       )}
     </>

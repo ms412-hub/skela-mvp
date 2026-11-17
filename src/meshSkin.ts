@@ -335,24 +335,46 @@ export function deformSkin(
     out[k * 3 + 1] = oy + (1 - wsum) * y
   }
 
-  // 품질 지표: 뒤집힌 삼각형, 가장 많이 늘어난 격자 변, 한도 초과 삼각형 수. 모든 삼각형을 그린다(숨김 없음).
+  // 품질 지표: 뒤집힌 삼각형, 가장 많이 늘어난 격자 변, 한도 초과 삼각형 수.
+  // 그리기 순서: 이동량이 큰 삼각형이 위에 오도록 정렬해서 outIndex에 쓴다.
+  // 두 다리가 겹치는 자세에서 메시가 접힐 때, 격자 행 순서로 그리면 두 다리의 층이 뒤섞여 줄무늬가 되기 때문이다.
+  // 많이 움직인 쪽(앞으로 나온 다리)이 위, 덜 움직인 쪽이 아래로 일관되게 겹치고, 접혀 뒤집힌 삼각형(천의 뒷면)은
+  // 렌더러가 뒷면 제외(FrontSide)로 그리지 않는다. 삼각형을 지우는 것이 아니라 겹침을 올바르게 가리는 것이다.
   let folds = 0
   let overLimit = 0
-  let drawCount = 0
   const W1 = nx + 1
+  const nVert = rest.length / 3
+  const nTri = nx * ny * 2
   const area = (a: number, b: number, c: number, p: Float32Array) =>
     (p[b * 3] - p[a * 3]) * (p[c * 3 + 1] - p[a * 3 + 1]) - (p[c * 3] - p[a * 3]) * (p[b * 3 + 1] - p[a * 3 + 1])
   const ratio = (a: number, b: number) => {
     const r = Math.hypot(rest[b * 3] - rest[a * 3], rest[b * 3 + 1] - rest[a * 3 + 1]) || 1
     return Math.hypot(out[b * 3] - out[a * 3], out[b * 3 + 1] - out[a * 3 + 1]) / r
   }
-  let maxStretch = 1
-  const tri = (a: number, b: number, c: number) => {
-    if (outIndex) {
-      outIndex[drawCount++] = a
-      outIndex[drawCount++] = b
-      outIndex[drawCount++] = c
+  let disp: Float32Array | null = null
+  let maxD = 0
+  let bucket: Uint8Array | null = null
+  let tv: Uint32Array | null = null
+  if (outIndex) {
+    disp = new Float32Array(nVert)
+    for (let k = 0; k < nVert; k++) {
+      const d = Math.hypot(out[k * 3] - rest[k * 3], out[k * 3 + 1] - rest[k * 3 + 1])
+      disp[k] = d
+      if (d > maxD) maxD = d
     }
+    bucket = new Uint8Array(nTri)
+    tv = new Uint32Array(nTri * 3)
+  }
+  let maxStretch = 1
+  let t = 0
+  const tri = (a: number, b: number, c: number) => {
+    if (bucket && tv && disp) {
+      tv[t * 3] = a
+      tv[t * 3 + 1] = b
+      tv[t * 3 + 2] = c
+      bucket[t] = maxD > 1e-6 ? Math.min(255, Math.floor((Math.max(disp[a], disp[b], disp[c]) / maxD) * 255)) : 0
+    }
+    t++
     if (!active[a] && !active[b] && !active[c]) return // 세 정점 모두 고정이면 변하지 않음
     const st = Math.max(ratio(a, b), ratio(b, c), ratio(c, a))
     if (st > maxStretch) maxStretch = st
@@ -368,6 +390,20 @@ export function deformSkin(
       tri(a, c, b)
       tri(b, c, d)
     }
+  }
+  let drawCount = 0
+  if (outIndex && bucket && tv) {
+    // 계수 정렬(안정): 이동량 구간이 작은 삼각형부터 outIndex에 쓴다
+    const start = new Uint32Array(257)
+    for (let q = 0; q < nTri; q++) start[bucket[q] + 1]++
+    for (let q = 0; q < 256; q++) start[q + 1] += start[q]
+    for (let q = 0; q < nTri; q++) {
+      const pos = start[bucket[q]]++
+      outIndex[pos * 3] = tv[q * 3]
+      outIndex[pos * 3 + 1] = tv[q * 3 + 1]
+      outIndex[pos * 3 + 2] = tv[q * 3 + 2]
+    }
+    drawCount = nTri * 3
   }
   return { folds, maxStretch, overLimit, drawCount }
 }

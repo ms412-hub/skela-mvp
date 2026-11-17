@@ -121,6 +121,10 @@ function rebuild() {
   geom.setIndex(new THREE.BufferAttribute(new Uint32Array(backend.index), 1))
   if (backend.colors) geom.setAttribute('color', new THREE.BufferAttribute(backend.colors, 4))
   mesh.geometry = geom
+  // 수정 전(비교용)은 원래 그대로 양면 그리기, 수정 후는 접혀 뒤집힌 삼각형(뒷면)을 그리지 않음
+  const mat = mesh.material as THREE.MeshBasicMaterial
+  mat.side = algo === 'legacy' ? THREE.DoubleSide : THREE.FrontSide
+  mat.needsUpdate = true
   paint.geometry = geom
   paint.visible = showParts && !!backend.colors
   update()
@@ -356,9 +360,9 @@ $<HTMLInputElement>('parts').addEventListener('change', (e) => {
 }
 
 /* ───── 시작 ───── */
-mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, toneMapped: false }))
+mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ side: THREE.FrontSide, toneMapped: false })) // 접혀 뒤집힌 삼각형(뒷면)은 그리지 않음
 mesh.frustumCulled = false
-paint = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }))
+paint = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.FrontSide, toneMapped: false }))
 paint.frustumCulled = false
 paint.visible = false
 paint.position.z = 0.02
