@@ -2,9 +2,9 @@
 import * as THREE from 'three'
 import {
   buildSkin, deformSkin, makeBody, makeLimits, projectPose, partColors,
-  limbRest, solveIK, flipBendAngles, footAngleFor, posedTipPos,
+  limbRest, solveIK, flipBendAngles, footAngleFor, posedTipPos, foregroundMask,
 } from '../../src/meshSkin'
-import type { RestChain } from '../../src/meshSkin'
+import type { RestChain, ForegroundMask } from '../../src/meshSkin'
 import { buildSkin as buildLegacy, deformSkin as deformLegacy } from './legacy/meshSkinLegacy'
 
 type P = { x: number; y: number }
@@ -37,6 +37,8 @@ let who = 'girl'
 let algo: 'fixed' | 'legacy' = 'fixed'
 let angles: Angles = {}
 let showParts = false
+let outlineAware = true // 윤곽 인식(가장자리 번짐 줄이기) 켜기/끄기
+let fgMask: ForegroundMask | null = null
 let W = 0
 let H = 0
 let rest: Record<number, P> = {}
@@ -103,7 +105,7 @@ function makeBackend(): Backend {
     }
   }
   const body = makeBody((id) => w2(rest[id]))
-  const sk = buildSkin(chains, W, H, 12, body)
+  const sk = buildSkin(chains, W, H, 12, body, outlineAware ? fgMask : null)
   const lim = makeLimits((id) => w2(rest[id]))
   return {
     project: (prev, cand, pin) => projectPose(sk, chains, lim, prev, cand, pin),
@@ -139,6 +141,13 @@ function loadCharacter(name: string) {
   angles = {}
   const img = new Image()
   img.onload = () => {
+    // 윤곽 인식용 전경 마스크: 이미지를 W×H로 그려서 가장자리에서 이어진 배경을 구분
+    const cv = document.createElement('canvas')
+    cv.width = W
+    cv.height = H
+    const cx = cv.getContext('2d')!
+    cx.drawImage(img, 0, 0, W, H)
+    fgMask = foregroundMask(cx.getImageData(0, 0, W, H).data, W, H)
     tex?.dispose()
     tex = new THREE.Texture(img)
     tex.colorSpace = THREE.SRGBColorSpace
@@ -340,6 +349,10 @@ $('reset').addEventListener('click', () => {
 })
 document.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((b) => b.addEventListener('click', () => preset(b.dataset.preset!)))
 document.querySelectorAll<HTMLButtonElement>('[data-flip]').forEach((b) => b.addEventListener('click', () => flip(b.dataset.flip!)))
+$<HTMLInputElement>('outline').addEventListener('change', (e) => {
+  outlineAware = (e.target as HTMLInputElement).checked
+  rebuild()
+})
 $<HTMLInputElement>('parts').addEventListener('change', (e) => {
   showParts = (e.target as HTMLInputElement).checked
   paint.visible = showParts && !!backend.colors
@@ -355,6 +368,7 @@ $<HTMLInputElement>('parts').addEventListener('change', (e) => {
   algo: (v: string) => { algo = v as 'fixed' | 'legacy'; rebuild() },
   who: (v: string) => loadCharacter(v),
   flip: (k: string) => flip(k),
+  outline: (on: boolean) => { outlineAware = on; rebuild() },
   parts: (on: boolean) => { showParts = on; paint.visible = on && !!backend.colors; update() },
   capture: (on: boolean) => { capturing = on; update() },
 }

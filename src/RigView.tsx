@@ -6,7 +6,7 @@ import * as THREE from 'three'
 import { AssetLayer, AssetPanel } from './Assets'
 import type { AssetItem } from './Assets'
 import {
-  buildSkin, deformSkin, makeBody, makeLimits, projectPose, withTips, partColors, PART_LEGEND,
+  buildSkin, deformSkin, makeBody, makeLimits, projectPose, withTips, partColors, foregroundMask, PART_LEGEND,
   limbRest, solveIK, flipBendAngles, footAngleFor, posedTipPos,
 } from './meshSkin'
 import type { DeformStats } from './meshSkin'
@@ -896,6 +896,14 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
   )
   const baseTex = useMemo(() => mkTex(rig.base), [rig])
 
+  // 윤곽선 인식용 전경 마스크 (메시 모드에서만 계산). 배경을 못 찾으면 null이라 기존 방식으로 동작한다.
+  const fgMask = useMemo(() => {
+    if (!meshMode) return null
+    const ctx = rig.src.getContext('2d')
+    if (!ctx) return null
+    return foregroundMask(ctx.getImageData(0, 0, rig.src.width, rig.src.height).data, rig.src.width, rig.src.height)
+  }, [meshMode, rig])
+
   // 메시 변형용: 원본 이미지(오려낸 파츠 영역은 제외)를 텍스처로 유지하고 자동 가중치 계산
   const backend = useMemo<MeshBackend | null>(() => {
     if (!meshMode) return null
@@ -914,7 +922,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
     }))
     // 다른 스키닝 방식(예: src/experimental/meshSkinMulti.ts)은 같은 MeshBackend 모양으로 여기에 연결할 수 있음
     const body = makeBody((id) => w2(get(id)))
-    const sk = buildSkin(chains, width, height, 12, body)
+    const sk = buildSkin(chains, width, height, 12, body, fgMask)
     const lim = makeLimits((id) => w2(get(id)))
     return {
       rest: sk.rest,
@@ -925,7 +933,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
       // 조작 중 자세 제한: 어깨·골반 이동 범위 + 늘어남 한도(팔 ×7, 다리 ×5)를 넘지 않는 가장 가까운 자세로 되돌림
       project: (prev, cand, pin) => projectPose(sk, chains, lim, prev, cand, pin),
     }
-  }, [meshMode, pts, width, height, armHW, legHW])
+  }, [meshMode, pts, width, height, armHW, legHW, fgMask])
   const meshTex = useMemo(() => (meshMode ? mkTex(rig.src) : null), [meshMode, rig])
 
   const guideUrl = useMemo(

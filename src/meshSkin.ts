@@ -104,13 +104,84 @@ function distSeg(p: V2, a: V2, b: V2) {
 }
 
 const smooth = (t: number) => t * t * (3 - 2 * t)
+const SNAP_MIN_S = 0.35 // 윤곽 인식은 윗뼈 길이의 이 비율보다 뿌리에서 먼 곳에서만 적용
+const SNAP_REACH = 30 // 뼈 폭 밖으로 전경을 따라 "안쪽"으로 보는 최대 거리(px)
 const TERRITORY_MARGIN = 10 // 손/발 영역 경계의 부드러운 구간 반폭(px)
 const TERRITORY_LIMB = 40 // 팔다리 영역 경계의 부드러운 구간 반폭(px). 10~55 측정: 넓을수록 다리 늘어남이 줄고(무릎 굽힘 ×6.3→×2.9), 반대 다리 간섭은 5~8px로 비슷함
+
+/* ───────── 전경 마스크 (윤곽선 인식) ───────── */
+
+// 전경 마스크: 1 = 캐릭터(전경), 0 = 배경. 크기는 이미지 W×H.
+export type ForegroundMask = { data: Uint8Array; w: number; h: number }
+
+// 가장자리에서 시작해 배경색(밝고 무채색)으로 이어진 영역만 배경으로 보고, 나머지를 전경으로 본다.
+// 캐릭터 안쪽의 흰 옷·흰 머리는 윤곽선에 둘러싸여 있으면 전경으로 남는다.
+// 배경이 거의 없다고 판단되면(가장자리가 배경색이 아니거나 배경이 복잡함) null을 돌려 윤곽 인식을 끈다.
+export function foregroundMask(rgba: Uint8ClampedArray | Uint8Array, W: number, H: number, tol = 24): ForegroundMask | null {
+  const isBg = (i: number) => {
+    if (rgba[i + 3] < 10) return true
+    const mx = Math.max(rgba[i], rgba[i + 1], rgba[i + 2])
+    const mn = Math.min(rgba[i], rgba[i + 1], rgba[i + 2])
+    return mx - mn <= tol && mn >= 255 - tol * 2
+  }
+  const bg = new Uint8Array(W * H)
+  const stack: number[] = []
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= W || y >= H) return
+    const k = y * W + x
+    if (bg[k] || !isBg(k * 4)) return
+    bg[k] = 1
+    stack.push(k)
+  }
+  for (let x = 0; x < W; x++) {
+    push(x, 0)
+    push(x, H - 1)
+  }
+  for (let y = 0; y < H; y++) {
+    push(0, y)
+    push(W - 1, y)
+  }
+  while (stack.length) {
+    const k = stack.pop()!
+    const x = k % W
+    const y = (k - x) / W
+    push(x + 1, y)
+    push(x - 1, y)
+    push(x, y + 1)
+    push(x, y - 1)
+  }
+  let nbg = 0
+  for (let k = 0; k < bg.length; k++) nbg += bg[k]
+  if (nbg < bg.length * 0.15) return null // 배경을 못 찾음
+  const data = new Uint8Array(W * H)
+  for (let k = 0; k < data.length; k++) data[k] = bg[k] ? 0 : 1
+  return { data, w: W, h: H }
+}
+
+// 정점 주변(반경 r px)에 전경 픽셀이 하나라도 있으면 그 정점은 전경으로 본다(윤곽 픽셀이 속한 칸을 포함하기 위해 약간 넓힘).
+function vertexForeground(mask: ForegroundMask, nx: number, ny: number, r: number): Uint8Array {
+  const out = new Uint8Array((nx + 1) * (ny + 1))
+  for (let j = 0; j <= ny; j++) {
+    for (let i = 0; i <= nx; i++) {
+      const cx = Math.round((i / nx) * (mask.w - 1))
+      const cy = Math.round((j / ny) * (mask.h - 1))
+      let hit = 0
+      for (let y = Math.max(0, cy - r); y <= Math.min(mask.h - 1, cy + r) && !hit; y++)
+        for (let x = Math.max(0, cx - r); x <= Math.min(mask.w - 1, cx + r); x++)
+          if (mask.data[y * mask.w + x]) {
+            hit = 1
+            break
+          }
+      out[j * (nx + 1) + i] = hit
+    }
+  }
+  return out
+}
 
 // 이미지 W×H 위에 격자 메시를 만들고 정점마다 자동 가중치를 계산.
 // 가중치는 팔다리마다 따로 연속적으로 계산해 그대로 섞는다(가장 가까운 팔다리 하나로 갈라 붙이지 않음).
 // 그래서 두 팔다리의 경계에서 정점이 서로 반대로 움직여 찢어지는 불연속이 생기지 않는다.
-export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, body?: BodyProtect): Skin {
+export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, body?: BodyProtect, mask?: ForegroundMask | null): Skin {
   const nx = Math.max(2, Math.ceil(W / cell))
   const ny = Math.max(2, Math.ceil(H / cell))
   const n = (nx + 1) * (ny + 1)
@@ -132,6 +203,97 @@ export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, 
     const l = Math.hypot(dx, dy) || 1
     return { x: c.e.x + (dx / l) * c.ext, y: c.e.y + (dy / l) * c.ext }
   })
+
+  // 윤곽선 인식: 뼈 폭 안쪽의 전경 정점에서 시작해, 전경으로 이어진 정점을 SNAP_REACH(px)까지 "안쪽"으로 본다.
+  // 감쇠 구간이 뼈 중심 거리로만 정해지면 바지·소매의 윤곽선이 감쇠 한가운데 걸려 윤곽 픽셀이 ×5로 늘어나 털처럼 번진다.
+  // 이렇게 하면 윤곽선 안쪽은 가중치 1을 유지하고, 감쇠는 윤곽선 바깥(단색 배경)에서 시작해 늘어나도 보이지 않는다.
+  let snap: Uint8Array[] | null = null
+  let snapDist: Float32Array[] | null = null // 넓혀진 영역 경계까지의 거리(px). 감쇠 구간이 윤곽선 바깥에서 시작하게 하는 기준
+  if (mask) {
+    const fg = vertexForeground(mask, nx, ny, Math.ceil(cell / 2))
+    const steps = Math.max(1, Math.ceil(SNAP_REACH / cell))
+    snap = chains.map((c, ci) => {
+      const hwE = c.hwEnd ?? c.hw
+      const L1 = Math.hypot(c.m.x - c.a.x, c.m.y - c.a.y)
+      const L2 = Math.hypot(c.e.x - c.m.x, c.e.y - c.m.y)
+      const minS = L1 * SNAP_MIN_S // 뿌리 관절 근처(옷·머리카락이 몸통과 겹치는 곳)는 윤곽 인식에서 뺀다
+      const dist = new Int16Array(n).fill(-1)
+      const okS = new Uint8Array(n)
+      const queue: number[] = []
+      for (let j = 0; j <= ny; j++) {
+        for (let i = 0; i <= nx; i++) {
+          const k = j * (nx + 1) + i
+          if (!fg[k]) continue
+          const p = { x: -W / 2 + (i / nx) * W, y: H / 2 - (j / ny) * H }
+          const exUp = distSeg(p, c.a, c.m) - c.hw
+          const exLo = distSeg(p, c.m, c.e) - c.hw
+          const exEnd = distSeg(p, c.e, tips[ci]) - hwE
+          const ex = Math.min(exUp, exLo, exEnd)
+          // 윗관절에서 팔다리를 따라 잰 거리
+          const S = ex === exUp ? segT(p, c.a, c.m) * L1 : ex === exLo ? L1 + segT(p, c.m, c.e) * L2 : L1 + L2
+          if (S >= minS) okS[k] = 1
+          if (ex <= 0 && S >= minS) {
+            dist[k] = 0
+            queue.push(k)
+          }
+        }
+      }
+      for (let h = 0; h < queue.length; h++) {
+        const k = queue[h]
+        if (dist[k] >= steps) continue
+        const i = k % (nx + 1)
+        const j = (k - i) / (nx + 1)
+        for (let dj = -1; dj <= 1; dj++) {
+          for (let di = -1; di <= 1; di++) {
+            const ni = i + di
+            const nj = j + dj
+            if ((di === 0 && dj === 0) || ni < 0 || nj < 0 || ni > nx || nj > ny) continue
+            const nk = nj * (nx + 1) + ni
+            if (fg[nk] && okS[nk] && dist[nk] < 0) {
+              dist[nk] = dist[k] + 1
+              queue.push(nk)
+            }
+          }
+        }
+      }
+      const out = new Uint8Array(n)
+      for (let k = 0; k < n; k++) if (dist[k] >= 0) out[k] = 1
+      return out
+    })
+    // 거리 변환(chamfer): 넓혀진 영역(snap)에서 각 정점까지의 거리(px)
+    snapDist = snap.map((sn) => {
+      const d = new Float32Array(n)
+      const diag = cell * Math.SQRT2
+      for (let k = 0; k < n; k++) d[k] = sn[k] ? 0 : 1e9
+      for (let j = 0; j <= ny; j++) {
+        for (let i = 0; i <= nx; i++) {
+          const k = j * (nx + 1) + i
+          let v = d[k]
+          if (i > 0) v = Math.min(v, d[k - 1] + cell)
+          if (j > 0) {
+            v = Math.min(v, d[k - (nx + 1)] + cell)
+            if (i > 0) v = Math.min(v, d[k - (nx + 1) - 1] + diag)
+            if (i < nx) v = Math.min(v, d[k - (nx + 1) + 1] + diag)
+          }
+          d[k] = v
+        }
+      }
+      for (let j = ny; j >= 0; j--) {
+        for (let i = nx; i >= 0; i--) {
+          const k = j * (nx + 1) + i
+          let v = d[k]
+          if (i < nx) v = Math.min(v, d[k + 1] + cell)
+          if (j < ny) {
+            v = Math.min(v, d[k + (nx + 1)] + cell)
+            if (i < nx) v = Math.min(v, d[k + (nx + 1) + 1] + diag)
+            if (i > 0) v = Math.min(v, d[k + (nx + 1) - 1] + diag)
+          }
+          d[k] = v
+        }
+      }
+      return d
+    })
+  }
 
   for (let j = 0; j <= ny; j++) {
     for (let i = 0; i <= nx; i++) {
@@ -183,7 +345,9 @@ export function buildSkin(chains: RestChain[], W: number, H: number, cell = 12, 
         const S = ex === exUp ? segT({ x, y }, c.a, c.m) * L1 : ex === exLo ? L1 + segT({ x, y }, c.m, c.e) * L2 : L1 + L2 + segT({ x, y }, c.e, tips[ci]) * Math.hypot(tips[ci].x - c.e.x, tips[ci].y - c.e.y)
         // 가장자리에서 서서히 약해지는 구간. 윗관절에서 멀수록(지렛대가 길수록) 이동량이 크므로 구간도 넓힌다.
         const fall = Math.max(c.hw * 1.5, 40, S * 0.45)
-        const t = ex / fall
+        // 윤곽선 안쪽으로 이어진 전경은 안쪽(0)으로 보고, 그 밖은 넓혀진 영역의 경계에서부터 거리를 잰다
+        const exF = snap && snapDist ? (snap[ci][k] ? Math.min(ex, 0) : Math.min(ex, snapDist[ci][k])) : ex
+        const t = exF / fall
         const fv = t <= 0 ? 1 : t >= 1 ? 0 : 1 - smooth(t)
         const wc = fv * (1 - protect)
         w[k * nc + ci] = wc
