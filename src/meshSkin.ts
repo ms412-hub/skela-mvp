@@ -152,7 +152,9 @@ export function foregroundMask(rgba: Uint8ClampedArray | Uint8Array, W: number, 
   }
   let nbg = 0
   for (let k = 0; k < bg.length; k++) nbg += bg[k]
-  if (nbg < bg.length * 0.15) return null // 배경을 못 찾음
+  // 배경이 전체의 45%도 안 되면 배경을 제대로 못 찾은 것으로 본다(캐릭터가 화면의 절반 넘게 차지하는 일은 드묾).
+  // 그라데이션·컬러 배경에서 위쪽 흰 부분만 배경으로 잡고 나머지를 캐릭터로 오인하는 경우(전경 70%대)를 걸러낸다.
+  if (nbg < bg.length * 0.45) return null
   const data = new Uint8Array(W * H)
   for (let k = 0; k < data.length; k++) data[k] = bg[k] ? 0 : 1
   return { data, w: W, h: H }
