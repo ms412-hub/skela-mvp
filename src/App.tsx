@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
 import RigView from './RigView'
 import { normalizeTips } from './meshSkin'
+import { CUSTOM_MIN, mergeDetected, moveJoint, resetToAuto, countManual } from './jointMerge'
+import type { JointPt } from './jointMerge'
 
 const MP_VERSION = '1.2.0'
 const WASM_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`
@@ -38,9 +40,8 @@ const LINES: [number, number][] = [
   [15, 19], [16, 20], [27, 31], [28, 32],
 ]
 
-type Pt = { id: number; name: string; x: number; y: number }
+type Pt = JointPt // id, name, x, y, source('auto' | 'manual')
 type Tool = 'move' | 'add' | 'link'
-const CUSTOM_MIN = 100 // 추가 관절 id는 100부터 (기본 13개는 MediaPipe id)
 const hasLine = (a: number, b: number, links: [number, number][]) =>
   [...LINES, ...links].some(([x, y]) => (x === a && y === b) || (x === b && y === a))
 
@@ -103,8 +104,10 @@ export default function App() {
       ctx.arc(p.x, p.y, isSel ? 9 : 6, 0, Math.PI * 2)
       ctx.fillStyle = isSel ? '#ffd23f' : p.id >= CUSTOM_MIN ? '#4cc9f0' : '#3ddc84'
       ctx.fill()
-      ctx.lineWidth = 2
-      ctx.strokeStyle = '#000'
+      // 사람이 옮긴 기본 관절은 주황 테두리로 표시(다시 추정해도 유지됨)
+      const manual = p.id < CUSTOM_MIN && p.source === 'manual'
+      ctx.lineWidth = manual ? 3 : 2
+      ctx.strokeStyle = manual ? '#ff9f1c' : '#000'
       ctx.stroke()
     }
   }, [pts, selected, links])
@@ -146,7 +149,9 @@ export default function App() {
     return landmarkerRef.current
   }
 
-  async function detect() {
+  // 자동 추정. 이미 사람이 손본 관절이 있으면 그 위치와 추가 관절·연결은 유지하고 나머지만 새 값으로 갱신한다.
+  // discardManual: 사람이 옮긴 기본 관절도 새 추정값으로 덮어쓴다(추가 관절은 유지).
+  async function detect(discardManual = false) {
     if (!imgRef.current) return
     try {
       const landmarker = await getLandmarker()
@@ -156,8 +161,13 @@ export default function App() {
       const result = landmarker.detect(canvas)
 
       if (result.landmarks.length === 0) {
-        setStatus('❌ 사람 몸을 찾지 못했어요. 전신 정면 그림으로 시도해보세요.')
-        setPts(null)
+        // 이미 작업한 관절이 있으면 지우지 않는다
+        setStatus(
+          pts
+            ? '❌ 사람 몸을 찾지 못했어요. 기존 관절은 그대로 두었어요.'
+            : '❌ 사람 몸을 찾지 못했어요. 전신 정면 그림으로 시도해보세요.',
+        )
+        if (!pts) setPts(null)
         return
       }
 
@@ -167,11 +177,16 @@ export default function App() {
         x: lm[j.id].x * canvas.width,
         y: lm[j.id].y * canvas.height,
       })), { w: canvas.width, h: canvas.height })
-      originalRef.current = found.map((p) => ({ ...p }))
-      setPts(found)
-      setLinks([])
+      originalRef.current = found.map((p) => ({ ...p, source: 'auto' as const })) // "원래 추정값으로"의 기준은 항상 가장 최근 자동 추정
+      const merged = mergeDetected(pts, found, { discardManual })
+      setPts(merged.pts)
+      if (!pts) setLinks([]) // 처음 추정일 때만 연결 초기화. 다시 추정할 때는 사람이 만든 연결을 유지
       setSelected(null)
-      setStatus('✅ 점을 드래그해서 몸에 맞게 고쳐보세요')
+      setStatus(
+        pts
+          ? `✅ 다시 추정했어요: 손본 관절 ${merged.keptManual}개·추가 관절 ${merged.custom}개 유지, 자동 ${merged.refreshed}개 갱신`
+          : '✅ 점을 드래그해서 몸에 맞게 고쳐보세요',
+      )
     } catch (err) {
       console.error(err)
       setStatus('⚠️ 오류가 났어요. F12 → Console을 확인해주세요.')
@@ -256,7 +271,7 @@ export default function App() {
     const canvas = canvasRef.current!
     const cx = Math.min(Math.max(x, 0), canvas.width)
     const cy = Math.min(Math.max(y, 0), canvas.height)
-    setPts(pts.map((p) => (p.id === id ? { ...p, x: cx, y: cy } : p)))
+    setPts(moveJoint(pts, id, cx, cy)) // 기본 관절을 옮기면 '손본 관절'로 표시
   }
 
   function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
@@ -268,8 +283,8 @@ export default function App() {
 
   function resetPoints() {
     if (!originalRef.current) return
-    // 기본 13개 관절만 되돌리고, 추가한 관절·연결은 유지
-    setPts([...originalRef.current.map((p) => ({ ...p })), ...pts!.filter((p) => p.id >= CUSTOM_MIN)])
+    // 기본 관절만 가장 최근 자동 추정값으로 되돌리고(손본 표시도 해제), 추가한 관절·연결은 유지
+    setPts(resetToAuto(originalRef.current, pts!))
     setSelected(null)
     setStatus('원래 추정값으로 되돌렸어요 (추가 관절은 유지)')
   }
@@ -331,9 +346,14 @@ export default function App() {
           이미지 선택
           <input type="file" accept="image/*" onChange={handleFile} hidden />
         </label>
-        <button className="btn" onClick={detect} disabled={!hasImage}>
+        <button className="btn" onClick={() => detect()} disabled={!hasImage}>
           관절 추정
         </button>
+        {countManual(pts) > 0 && (
+          <button className="btn ghost" onClick={() => detect(true)} title="사람이 옮긴 기본 관절도 새 추정값으로 덮어씁니다. 추가한 관절은 유지됩니다.">
+            손본 관절 버리고 재추정
+          </button>
+        )}
         <button className="btn ghost" onClick={resetPoints} disabled={!pts}>
           원래 추정값으로
         </button>

@@ -10,8 +10,9 @@ import {
   limbRest, solveIK, flipBendAngles, footAngleFor, posedTipPos,
 } from './meshSkin'
 import type { DeformStats } from './meshSkin'
+import { cleanSource } from './jointMerge'
 
-type Pt = { id: number; name: string; x: number; y: number }
+type Pt = { id: number; name: string; x: number; y: number; source?: 'auto' | 'manual' }
 type P = { x: number; y: number }
 type Props = {
   img: HTMLImageElement
@@ -1016,6 +1017,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
         name: p.name,
         x: p.x, // 반올림하지 않음: 소수 첫째 자리는 불러온 뒤 화면이 달라졌고 셋째 자리도 가장자리 픽셀이 바뀜(측정)
         y: p.y,
+        ...(p.source ? { source: p.source } : {}), // 손본 관절 표시(없으면 생략: 옛 파일과 호환)
       })),
       links,
       parts: assets
@@ -1068,7 +1070,12 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
         alert('기본 관절(13개)이 빠진 포즈 파일이에요.')
       } else {
         const ids = new Set<number>(d.points.map((q: Pt) => q.id))
-        onPtsLoad(withTips(d.points, { w: width, h: height }))
+        onPtsLoad(
+          withTips(
+            d.points.map((q: Pt) => ({ ...q, source: cleanSource(q.source) })), // 알 수 없는 값은 없는 것으로 정리
+            { w: width, h: height },
+          ),
+        )
         onLinksLoad(
           Array.isArray(d.links)
             ? d.links.filter((l: [number, number]) => ids.has(l[0]) && ids.has(l[1]))
