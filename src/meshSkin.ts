@@ -150,11 +150,21 @@ export function foregroundMask(rgba: Uint8ClampedArray | Uint8Array, W: number, 
     push(x, y + 1)
     push(x, y - 1)
   }
+  // 배경을 제대로 찾았는지 본다. 이미지 테두리가 거의 전부 배경색이어야 한다(그라데이션·컬러 배경은 테두리 일부가 배경색이 아님).
+  // 예전에는 "배경이 전체의 45% 이상"으로 걸렀지만, 긴 치마·망토처럼 캐릭터가 화면을 넓게 채우면 정상 배경도 37~43%라 꺼졌다.
+  let border = 0
+  let borderBg = 0
+  const countB = (x: number, y: number) => {
+    border++
+    borderBg += isBg((y * W + x) * 4) ? 1 : 0
+  }
+  for (let x = 0; x < W; x++) { countB(x, 0); countB(x, H - 1) }
+  for (let y = 1; y < H - 1; y++) { countB(0, y); countB(W - 1, y) }
+  if (borderBg < border * 0.9) return null
   let nbg = 0
   for (let k = 0; k < bg.length; k++) nbg += bg[k]
-  // 배경이 전체의 45%도 안 되면 배경을 제대로 못 찾은 것으로 본다(캐릭터가 화면의 절반 넘게 차지하는 일은 드묾).
-  // 그라데이션·컬러 배경에서 위쪽 흰 부분만 배경으로 잡고 나머지를 캐릭터로 오인하는 경우(전경 70%대)를 걸러낸다.
-  if (nbg < bg.length * 0.45) return null
+  // 테두리는 배경색인데 연결된 배경이 아주 적으면(테두리가 얇게 이어진 경우 등) 믿을 수 없다
+  if (nbg < bg.length * 0.15) return null
   const data = new Uint8Array(W * H)
   for (let k = 0; k < data.length; k++) data[k] = bg[k] ? 0 : 1
   return { data, w: W, h: H }
