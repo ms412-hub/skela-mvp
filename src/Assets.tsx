@@ -27,11 +27,20 @@ export const ANCHORS = [
   { key: 'handL', label: '왼손', chain: 'armL' },
   { key: 'footR', label: '오른발', chain: 'legR' },
   { key: 'footL', label: '왼발', chain: 'legL' },
+  // 뼈 단위 붙이기: 오려낸 파츠를 윗팔/아래팔/허벅지/종아리 뼈에 붙여 그 뼈와 함께 움직이게 한다(2.5D 레이어)
+  { key: 'armR_up', label: '오른 윗팔 (어깨→팔꿈치)', chain: '', seg: 'armR:up' },
+  { key: 'armR_lo', label: '오른 아래팔 (팔꿈치→손목)', chain: '', seg: 'armR:lo' },
+  { key: 'armL_up', label: '왼 윗팔 (어깨→팔꿈치)', chain: '', seg: 'armL:up' },
+  { key: 'armL_lo', label: '왼 아래팔 (팔꿈치→손목)', chain: '', seg: 'armL:lo' },
+  { key: 'legR_up', label: '오른 허벅지 (골반→무릎)', chain: '', seg: 'legR:up' },
+  { key: 'legR_lo', label: '오른 종아리 (무릎→발목)', chain: '', seg: 'legR:lo' },
+  { key: 'legL_up', label: '왼 허벅지 (골반→무릎)', chain: '', seg: 'legL:up' },
+  { key: 'legL_lo', label: '왼 종아리 (무릎→발목)', chain: '', seg: 'legL:lo' },
   { key: 'head', label: '머리', chain: '' },
   { key: 'chest', label: '가슴 (어깨 중앙)', chain: '' },
   { key: 'waist', label: '허리 (골반 중앙)', chain: '' },
   { key: 'free', label: '고정 (캔버스 중앙 기준)', chain: '' },
-] as const
+] as { key: string; label: string; chain: string; seg?: string }[]
 
 const toRad = (d: number) => (d * Math.PI) / 180
 const toDeg = (r: number) => (r * 180) / Math.PI
@@ -105,7 +114,7 @@ function removeWhite(img: Src, tol: number): HTMLCanvasElement {
 
 /* ───────────── Three.js 안에서 소품 그리기 ───────────── */
 
-type Posed = { key: string; e: { x: number; y: number } }
+type Posed = { key: string; a?: { x: number; y: number }; m?: { x: number; y: number }; e: { x: number; y: number } }
 
 function anchorInfo(
   anchor: string,
@@ -119,6 +128,14 @@ function anchorInfo(
   const def = ANCHORS.find((a) => a.key === anchor)
   if (!def) return null
 
+  if (def.seg) {
+    const [ck, part] = def.seg.split(':')
+    const ch = posed.find((p) => p.key === ck)
+    const piv = part === 'up' ? ch?.a : ch?.m
+    if (!ch || !piv) return null
+    const up = angles[ck + '_up'] ?? 0
+    return { x: piv.x, y: piv.y, rot: part === 'up' ? up : up + (angles[ck + '_lo'] ?? 0) }
+  }
   if (def.chain) {
     const ch = posed.find((p) => p.key === def.chain)
     if (!ch) return null
@@ -135,6 +152,25 @@ function anchorInfo(
   const b = get(ids[1])
   if (!a || !b) return null
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, rot: 0 }
+}
+
+// 각도 0(원래 자세)에서의 붙일 위치. 앵커를 바꿔도 파츠가 제자리에 있도록 오프셋을 다시 계산할 때 쓴다.
+const CHAIN_IDS: Record<string, [number, number, number]> = { armR: [12, 14, 16], armL: [11, 13, 15], legR: [24, 26, 28], legL: [23, 25, 27] }
+export function restAnchor(anchor: string, pts: PtLike[], W: number, H: number) {
+  const posed: Posed[] = []
+  for (const [key, ids] of Object.entries(CHAIN_IDS)) {
+    const g = (id: number) => pts.find((p) => p.id === id)
+    const a = g(ids[0]), m = g(ids[1]), e = g(ids[2])
+    if (a && m && e) posed.push({ key, a: { x: a.x, y: a.y }, m: { x: m.x, y: m.y }, e: { x: e.x, y: e.y } })
+  }
+  return anchorInfo(anchor, pts, posed, {}, W, H)
+}
+// 앵커를 from → to로 바꿀 때 원래 자세에서 파츠 위치가 변하지 않게 하는 새 오프셋(세계 좌표, y 위)
+export function rebindOffset(from: string, to: string, off: { x: number; y: number }, pts: PtLike[], W: number, H: number) {
+  const a = restAnchor(from, pts, W, H)
+  const b = restAnchor(to, pts, W, H)
+  if (!a || !b) return off
+  return { x: Math.round(off.x + (a.x - b.x)), y: Math.round(off.y - (a.y - b.y)) }
 }
 
 type Info = { x: number; y: number; rot: number }
@@ -346,11 +382,17 @@ export function AssetPanel({
   setAssets,
   selectedId,
   setSelectedId,
+  pts,
+  W,
+  H,
 }: {
   assets: AssetItem[]
   setAssets: React.Dispatch<React.SetStateAction<AssetItem[]>>
   selectedId: number | null
   setSelectedId: (id: number | null) => void
+  pts: PtLike[]
+  W: number
+  H: number
 }) {
   const sel = assets.find((a) => a.id === selectedId) ?? null
 
@@ -426,7 +468,14 @@ export function AssetPanel({
         <div className="limb-group">
           <label>
             붙일 위치
-            <select value={sel.anchor} onChange={(e) => patch({ anchor: e.target.value })}>
+            <select value={sel.anchor} onChange={(e) => {
+                const to = e.target.value
+                // 오려낸 파츠는 붙이는 위치를 바꿔도 원래 자세에서 제자리에 있게 오프셋을 다시 계산한다
+                if (sel.poly) {
+                  const o = rebindOffset(sel.anchor, to, { x: sel.offX, y: sel.offY }, pts, W, H)
+                  patch({ anchor: to, offX: o.x, offY: o.y })
+                } else patch({ anchor: to })
+              }}>
               {ANCHORS.map((a) => (
                 <option key={a.key} value={a.key}>
                   {a.label}

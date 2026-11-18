@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
-import { AssetLayer, AssetPanel } from './Assets'
+import { AssetLayer, AssetPanel, ANCHORS } from './Assets'
 import type { AssetItem } from './Assets'
 import {
   buildSkin, deformSkin, makeBody, makeLimits, projectPose, withTips, partColors, foregroundMask, PART_LEGEND,
@@ -1031,6 +1031,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
           rot: a.rot,
           flip: a.flip,
           front: a.front,
+          anchor: a.anchor,
         })),
       armHW,
       legHW,
@@ -1082,7 +1083,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
             : [],
         )
         // 저장된 파츠 복원: 앞에서 오려낸 영역을 지운 이미지에서 차례로 다시 오림
-        const saved: { name: string; poly: P[]; scale: number; offX: number; offY: number; rot: number; flip: boolean; front: boolean }[] =
+        const saved: { name: string; poly: P[]; scale: number; offX: number; offY: number; rot: number; flip: boolean; front: boolean; anchor?: string }[] =
           Array.isArray(d.parts) ? d.parts : []
         const restored: AssetItem[] = []
         saved.forEach((sp, i) => {
@@ -1097,6 +1098,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
             rot: sp.rot,
             flip: sp.flip,
             front: sp.front,
+            anchor: ANCHORS.some((x) => x.key === sp.anchor) ? (sp.anchor as string) : 'free',
           })
         })
         setAssets((prev) => [...prev.filter((a) => !a.poly), ...restored])
@@ -1307,6 +1309,9 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
           setAssets={setAssets}
           selectedId={selAsset}
           setSelectedId={setSelAsset}
+          pts={pts}
+          W={width}
+          H={height}
         />
 
         <div className="panel-title">파츠 폭 (각도 0일 때 윤곽이 안 보이게)</div>
