@@ -4,6 +4,7 @@ import RigView from './RigView'
 import { normalizeTips } from './meshSkin'
 import { CUSTOM_MIN, mergeDetected, moveJoint, resetToAuto, countManual } from './jointMerge'
 import type { JointPt } from './jointMerge'
+import { defaultSkeleton } from './defaultSkeleton'
 
 const MP_VERSION = '1.2.0'
 const WASM_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`
@@ -165,7 +166,7 @@ export default function App() {
         setStatus(
           pts
             ? '❌ 사람 몸을 찾지 못했어요. 기존 관절은 그대로 두었어요.'
-            : '❌ 사람 몸을 찾지 못했어요. 전신 정면 그림으로 시도해보세요.',
+            : '❌ 사람 몸을 찾지 못했어요. "수동으로 시작"으로 직접 맞출 수 있어요.',
         )
         if (!pts) setPts(null)
         return
@@ -191,6 +192,19 @@ export default function App() {
       console.error(err)
       setStatus('⚠️ 오류가 났어요. F12 → Console을 확인해주세요.')
     }
+  }
+
+  // 자동 추정이 실패했거나 틀렸을 때: 기본 골격을 놓고 사람이 직접 맞춘다.
+  // 이미 관절이 있으면(손본 것 포함) 덮어쓰지 않는다.
+  function startManual() {
+    if (!imgRef.current || pts) return
+    const canvas = canvasRef.current!
+    const base = defaultSkeleton(canvas.width, canvas.height)
+    originalRef.current = base.map((p) => ({ ...p }))
+    setPts(base)
+    setLinks([])
+    setSelected(null)
+    setStatus('✅ 기본 골격을 놓았어요. 점을 그림의 몸에 맞게 드래그하세요')
   }
 
   // 화면 좌표 → 캔버스 좌표
@@ -348,6 +362,9 @@ export default function App() {
         </label>
         <button className="btn" onClick={() => detect()} disabled={!hasImage}>
           관절 추정
+        </button>
+        <button className="btn ghost" onClick={startManual} disabled={!hasImage || !!pts} title="자동 추정 없이 기본 골격을 놓고 직접 맞춥니다 (추정이 실패하는 그림용)">
+          수동으로 시작
         </button>
         {countManual(pts) > 0 && (
           <button className="btn ghost" onClick={() => detect(true)} title="사람이 옮긴 기본 관절도 새 추정값으로 덮어씁니다. 추가한 관절은 유지됩니다.">
