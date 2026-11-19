@@ -11,7 +11,8 @@ import {
 } from './meshSkin'
 import type { DeformStats } from './meshSkin'
 import { cleanSource } from './jointMerge'
-import { fillMasked } from './holeFill'
+import { fillHole } from './inpainting'
+import { createHistory, shallowEqualRecord } from './undoManager'
 
 type Pt = { id: number; name: string; x: number; y: number; source?: 'auto' | 'manual' }
 type P = { x: number; y: number }
@@ -145,7 +146,7 @@ function eraseParts(img: HTMLImageElement, W: number, H: number, polys: P[][]) {
   const mask = new Uint8Array(W * H)
   for (let i = 0; i < mask.length; i++) mask[i] = ma[i * 4 + 3] > 0 ? 1 : 0
   const id = ctx.getImageData(0, 0, W, H)
-  if (fillMasked(id.data, mask, W, H) === 0) {
+  if (fillHole(id.data, mask, W, H).filled === 0) {
     // 메울 색이 없는 경우(영역이 그림 전체): 예전처럼 배경색으로 덮는다
     ctx.fillStyle = bg
     ctx.strokeStyle = bg
@@ -888,6 +889,51 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
   const [angles, setAngles] = useState<Record<string, number>>({})
   const [assets, setAssets] = useState<AssetItem[]>([])
   const [selAsset, setSelAsset] = useState<number | null>(null)
+
+  // 되돌리기/다시 실행: 자세(angles)와 파츠(assets)의 "참조"만 쌓는다 (이미지 복사 없음). 드래그가 멈춘 뒤 한 단계로 기록한다.
+  type Snap = { angles: Record<string, number>; assets: AssetItem[] }
+  const hist = useRef(
+    createHistory<Snap>({ angles: {}, assets: [] }, { limit: 100, equals: (a, b) => shallowEqualRecord(a.angles, b.angles) && a.assets === b.assets }),
+  )
+  const [, setHistTick] = useState(0)
+  const latest = useRef({ angles, assets })
+  latest.current = { angles, assets }
+  useEffect(() => {
+    const t = setTimeout(() => { if (hist.current.commit({ angles, assets })) setHistTick((n) => n + 1) }, 400)
+    return () => clearTimeout(t)
+  }, [angles, assets])
+  useEffect(() => {
+    hist.current.reset(latest.current) // 이미지를 바꾸면 이전 이미지의 이력은 버린다
+    setHistTick((n) => n + 1)
+  }, [img])
+  function applySnap(sn: Snap | null) {
+    if (!sn) return
+    setAngles(sn.angles)
+    setAssets(sn.assets)
+    setSelAsset(null)
+    setHistTick((n) => n + 1)
+  }
+  function undo() {
+    hist.current.commit(latest.current) // 아직 기록되지 않은 마지막 변경을 먼저 한 단계로 남긴다
+    applySnap(hist.current.undo())
+  }
+  function redo() {
+    applySnap(hist.current.redo())
+  }
+  const acts = useRef({ undo, redo })
+  acts.current = { undo, redo }
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable || (t.tagName === 'INPUT' && (t as HTMLInputElement).type !== 'range'))) return
+      const k = e.key.toLowerCase()
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); acts.current.undo() }
+      else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); acts.current.redo() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const glEl = useRef<HTMLCanvasElement | null>(null)
   const [selectMode, setSelectMode] = useState(false) // 이미지 영역(파츠) 선택 모드
   const [meshMode, setMeshMode] = useState(false) // 메시 변형 모드 (이미지가 관절을 따라 휨)
@@ -1349,6 +1395,14 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
           포즈 불러오기
           <input type="file" accept="application/json,.json" onChange={loadPose} hidden />
         </label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn ghost" style={{ flex: 1 }} onClick={undo} disabled={!hist.current.canUndo() && JSON.stringify(latest.current.angles) === JSON.stringify(hist.current.present().angles) && latest.current.assets === hist.current.present().assets} title="되돌리기 (Ctrl+Z)">
+            ↶ 되돌리기
+          </button>
+          <button className="btn ghost" style={{ flex: 1 }} onClick={redo} disabled={!hist.current.canRedo()} title="다시 실행 (Ctrl+Y)">
+            ↷ 다시 실행
+          </button>
+        </div>
         <button className="btn ghost" onClick={() => setAngles({})}>
           모든 각도 0으로
         </button>

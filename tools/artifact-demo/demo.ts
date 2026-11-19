@@ -6,7 +6,7 @@ import {
 } from '../../src/meshSkin'
 import type { RestChain, ForegroundMask } from '../../src/meshSkin'
 import { defaultSkeleton } from '../../src/defaultSkeleton'
-import { fillMasked } from '../../src/holeFill'
+import { fillHole } from '../../src/inpainting'
 import { buildSkin as buildLegacy, deformSkin as deformLegacy } from './legacy/meshSkinLegacy'
 
 type P = { x: number; y: number }
@@ -435,7 +435,7 @@ function refreshUnder() {
   const x = c.getContext('2d')!
   x.drawImage(baseImg!, 0, 0, W, H)
   const img = x.getImageData(0, 0, W, H)
-  fillMasked(img.data, mask, W, H)
+  fillHole(img.data, mask, W, H)
   for (let i = 0; i < mask.length; i++) if (!mask[i]) img.data[i * 4 + 3] = 0 // 구멍 밖은 투명 (원래 그림이 겹쳐 보이면 안 된다)
   x.putImageData(img, 0, 0)
   const t = new THREE.CanvasTexture(c)
