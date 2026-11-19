@@ -5,6 +5,7 @@ import {
   limbRest, solveIK, flipBendAngles, footAngleFor, posedTipPos, foregroundMask,
 } from '../../src/meshSkin'
 import type { RestChain, ForegroundMask } from '../../src/meshSkin'
+import { defaultSkeleton } from '../../src/defaultSkeleton'
 import { buildSkin as buildLegacy, deformSkin as deformLegacy } from './legacy/meshSkinLegacy'
 
 type P = { x: number; y: number }
@@ -37,6 +38,8 @@ let who = 'girl'
 let algo: 'fixed' | 'legacy' = 'fixed'
 let angles: Angles = {}
 let showParts = false
+let editMode = false // 골격 맞추기: 기준 자세의 관절 점을 직접 옮기는 모드
+let editId: number | null = null
 let outlineAware = true // 윤곽 인식(가장자리 번짐 줄이기) 켜기/끄기
 let fgMask: ForegroundMask | null = null
 let W = 0
@@ -189,6 +192,7 @@ function drawOverlay() {
   const k = ov.width / W
   octx.clearRect(0, 0, ov.width, ov.height)
   if (capturing) return
+  if (editMode) { drawEdit(); return }
   const X = (p: P) => (p.x + W / 2) * k
   const Y = (p: P) => (H / 2 - p.y) * k
   const R = Math.max(7, 11 * (ov.width / 700))
@@ -216,6 +220,30 @@ function drawOverlay() {
     })
   }
 }
+function drawEdit() {
+  const k = ov.width / W
+  const R = Math.max(7, 11 * (ov.width / 700))
+  octx.lineWidth = Math.max(1.5, R / 5)
+  const line = (ids: number[]) => {
+    octx.beginPath()
+    ids.forEach((id, i) => { const p = rest[id]; if (!p) return; i ? octx.lineTo(p.x * k, p.y * k) : octx.moveTo(p.x * k, p.y * k) })
+    octx.strokeStyle = 'rgba(255,255,255,.92)'
+    octx.shadowColor = 'rgba(0,0,0,.55)'
+    octx.shadowBlur = 3
+    octx.stroke()
+    octx.shadowBlur = 0
+  }
+  ;[[12, 14, 16, 20], [11, 13, 15, 19], [24, 26, 28, 32], [23, 25, 27, 31], [11, 12], [23, 24]].forEach(line)
+  for (const id of Object.keys(rest).map(Number)) {
+    const p = rest[id]
+    octx.beginPath()
+    octx.arc(p.x * k, p.y * k, (editId === id ? 1.35 : 1) * R, 0, Math.PI * 2)
+    octx.fillStyle = id === 0 ? '#ffffff' : [19, 20, 31, 32].includes(id) ? '#c77dff' : [11, 12].includes(id) ? '#ffd23f' : id % 2 ? '#1d6fe0' : '#e63946'
+    octx.fill()
+    octx.strokeStyle = 'rgba(0,0,0,.65)'
+    octx.stroke()
+  }
+}
 function resize() {
   if (!W) return
   const cssW = stage.clientWidth
@@ -239,7 +267,25 @@ function toWorld(e: PointerEvent): P {
   const r = ov.getBoundingClientRect()
   return { x: ((e.clientX - r.left) / r.width) * W - W / 2, y: H / 2 - ((e.clientY - r.top) / r.height) * H }
 }
+const toImg = (e: PointerEvent): P => {
+  const q = toWorld(e)
+  return { x: Math.min(W - 2, Math.max(2, q.x + W / 2)), y: Math.min(H - 2, Math.max(2, H / 2 - q.y)) }
+}
 ov.addEventListener('pointerdown', (e) => {
+  if (editMode) {
+    const q = toImg(e)
+    let best: number | null = null
+    let bd = Math.max(18, W / 26)
+    for (const id of Object.keys(rest).map(Number)) {
+      const d = Math.hypot(rest[id].x - q.x, rest[id].y - q.y)
+      if (d < bd) { bd = d; best = id }
+    }
+    if (best === null) return
+    editId = best
+    ov.setPointerCapture(e.pointerId)
+    drawOverlay()
+    return
+  }
   const q = toWorld(e)
   const reach = Math.max(18, W / 26)
   let best: { key: string; part: 0 | 1 | 2 | 3; d: number; p: P } | null = null
@@ -263,6 +309,13 @@ ov.addEventListener('pointerdown', (e) => {
   update()
 })
 ov.addEventListener('pointermove', (e) => {
+  if (editMode) {
+    if (editId === null) return
+    const q = toImg(e)
+    rest[editId] = { x: r1(q.x), y: r1(q.y) }
+    drawOverlay()
+    return
+  }
   if (!active) return
   const q = toWorld(e)
   const t = { x: q.x + active.offX, y: q.y + active.offY }
@@ -292,6 +345,10 @@ ov.addEventListener('pointermove', (e) => {
   update()
 })
 const endDrag = () => {
+  if (editMode) {
+    if (editId !== null) { editId = null; angles = {}; rebuild() } // 점을 놓으면 메시를 새 골격으로 다시 만든다
+    return
+  }
   active = null
   update()
 }
@@ -342,6 +399,46 @@ seg('who', who, (v) => loadCharacter(v))
 seg('algo', algo, (v) => {
   algo = v as 'fixed' | 'legacy'
   rebuild()
+})
+function setEdit(on: boolean) {
+  editMode = on
+  editId = null
+  $<HTMLInputElement>('edit').checked = on
+  document.body.classList.toggle('editing', on)
+  angles = {}
+  if (on) drawOverlay()
+  else rebuild()
+}
+$<HTMLInputElement>('edit').addEventListener('change', (e) => setEdit((e.target as HTMLInputElement).checked))
+$('reset-skel').addEventListener('click', () => {
+  const d = DATA[who]
+  d.points = defaultSkeleton(d.w, d.h).map((j) => ({ id: j.id, x: j.x, y: j.y }))
+  rest = {}
+  for (const p of d.points) rest[p.id] = { x: p.x, y: p.y }
+  angles = {}
+  rebuild()
+})
+// 내 이미지 올리기: 가장 긴 변을 900px 이하로 줄이고, 앱의 기본 골격 위치로 시작한 뒤 점을 직접 옮겨 맞춘다
+$<HTMLInputElement>('upload').addEventListener('change', (e) => {
+  const f = (e.target as HTMLInputElement).files?.[0]
+  if (!f) return
+  const url = URL.createObjectURL(f)
+  const im = new Image()
+  im.onload = () => {
+    const sc = Math.min(1, 900 / Math.max(im.naturalWidth, im.naturalHeight))
+    const w = Math.round(im.naturalWidth * sc)
+    const h = Math.round(im.naturalHeight * sc)
+    const cv = document.createElement('canvas')
+    cv.width = w
+    cv.height = h
+    cv.getContext('2d')!.drawImage(im, 0, 0, w, h)
+    URL.revokeObjectURL(url)
+    DATA.custom = { w, h, img: cv.toDataURL('image/png'), points: defaultSkeleton(w, h).map((j) => ({ id: j.id, x: j.x, y: j.y })) }
+    document.querySelectorAll<HTMLButtonElement>('#who button').forEach((b) => b.setAttribute('aria-pressed', 'false'))
+    loadCharacter('custom')
+    setEdit(true)
+  }
+  im.src = url
 })
 $('reset').addEventListener('click', () => {
   angles = {}
