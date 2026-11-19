@@ -11,7 +11,10 @@ import {
 } from './meshSkin'
 import type { DeformStats } from './meshSkin'
 import { cleanSource } from './jointMerge'
-import { fillHole } from './inpainting'
+import { fillHole, fillHoleAsync } from './inpainting'
+import { createAiFill } from './ai/aiFill'
+import { browserCodec } from './ai/browserCodec'
+import { GEMINI_FILL_MODEL } from './ai/geminiFill'
 import { createHistory, shallowEqualRecord } from './undoManager'
 
 type Pt = { id: number; name: string; x: number; y: number; source?: 'auto' | 'manual' }
@@ -165,6 +168,26 @@ function eraseParts(img: HTMLImageElement, W: number, H: number, polys: P[][]) {
   hc.height = H
   hc.getContext('2d')!.putImageData(id, 0, 0)
   return { canvas: c, bg, hole: hc }
+}
+
+// 파츠 영역(다각형)을 구멍 마스크로 (eraseParts와 같은 두께)
+function maskFromPolys(polys: P[][], W: number, H: number) {
+  const mc = document.createElement('canvas')
+  mc.width = W
+  mc.height = H
+  const mx = mc.getContext('2d')!
+  mx.fillStyle = '#000'
+  mx.strokeStyle = '#000'
+  mx.lineWidth = 4
+  for (const poly of polys) {
+    tracePath(mx, poly)
+    mx.fill()
+    mx.stroke()
+  }
+  const ma = mx.getImageData(0, 0, W, H).data
+  const mask = new Uint8Array(W * H)
+  for (let i = 0; i < mask.length; i++) mask[i] = ma[i * 4 + 3] > 0 ? 1 : 0
+  return mask
 }
 
 // 메시 텍스처용: 파츠로 오려낸 영역을 투명하게 비운다.
@@ -946,11 +969,50 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
   const [apiKey, setApiKey] = useState<string>(getApiKey())
   const [promptText, setPromptText] = useState<string>('')
   const [aiStatus, setAiStatus] = useState<string>('')
+  // AI 구멍 복원 결과: 파츠 영역(polyKey)이 바뀌면 자동으로 무효가 된다
+  const [aiHole, setAiHole] = useState<{ key: string; canvas: HTMLCanvasElement } | null>(null)
+  const [aiHoleBusy, setAiHoleBusy] = useState(false)
+  const [aiHoleMsg, setAiHoleMsg] = useState('')
+  const [aiImgModel, setAiImgModel] = useState(GEMINI_FILL_MODEL)
   const [isGenerating, setIsGenerating] = useState<boolean>(false)
 
   const handleKeyChange = (val: string) => {
     setApiKey(val)
     setStoredApiKey(val)
+  }
+
+  // AI로 파츠를 뗀 자리를 복원 (유료 이미지 모델, 사용자가 누를 때만 호출). 결과는 메시 모드의 고정 바닥층에만 쓴다.
+  async function runAiHoleFill() {
+    const key = apiKey || getApiKey()
+    if (!key) { setAiHoleMsg('❌ Gemini API Key를 아래 입력칸에 넣어주세요.'); return }
+    const polys = assets.filter((a) => a.poly).map((a) => a.poly as P[])
+    if (!polys.length) { setAiHoleMsg('❌ 먼저 파츠를 만들어주세요.'); return }
+    setAiHoleBusy(true)
+    setAiHoleMsg('🤖 AI가 구멍을 채우는 중... (몇 초~수십 초, 유료 모델)')
+    try {
+      const c = document.createElement('canvas')
+      c.width = width
+      c.height = height
+      const cx = c.getContext('2d')!
+      cx.drawImage(img, 0, 0, width, height)
+      const id = cx.getImageData(0, 0, width, height)
+      const mask = maskFromPolys(polys, width, height)
+      let why = ''
+      const res = await fillHoleAsync(id.data, mask, width, height, {
+        strategy: 'ai',
+        aiFillAsync: createAiFill({ apiKey: key, model: aiImgModel, codec: browserCodec, onError: (m) => { why = m } }),
+      })
+      if (res.strategy !== 'ai') { setAiHoleMsg(`❌ AI 복원에 실패해서 기존 복원을 유지해요. ${why}`); return }
+      for (let i = 0; i < mask.length; i++) if (!mask[i]) id.data[i * 4 + 3] = 0 // 구멍 밖은 투명
+      const hc = document.createElement('canvas')
+      hc.width = width
+      hc.height = height
+      hc.getContext('2d')!.putImageData(id, 0, 0)
+      setAiHole({ key: polyKey, canvas: hc })
+      setAiHoleMsg('✅ AI 복원을 적용했어요. 메시 모드에서 파츠를 움직여 확인하세요.')
+    } finally {
+      setAiHoleBusy(false)
+    }
   }
 
   async function runGeminiInpaint() {
@@ -1041,7 +1103,11 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
       project: (prev, cand, pin) => projectPose(sk, chains, lim, prev, cand, pin),
     }
   }, [meshMode, pts, width, height, armHW, legHW, fgMask])
-  const holeTex = useMemo(() => (meshMode && rig.hole ? mkTex(rig.hole) : null), [meshMode, rig])
+  const aiHoleCanvas = aiHole && aiHole.key === polyKey ? aiHole.canvas : null
+  const holeTex = useMemo(() => {
+    const src = aiHoleCanvas ?? rig.hole
+    return meshMode && src ? mkTex(src) : null
+  }, [meshMode, rig, aiHoleCanvas])
   const meshTex = useMemo(() => (meshMode ? mkTex(rig.meshSrc) : null), [meshMode, rig])
 
   const guideUrl = useMemo(
@@ -1378,6 +1444,24 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
           >
             {isGenerating ? '생성 중...' : '🚀 Gemini AI 포즈 합성 실행'}
           </button>
+          <div style={{ marginTop: 10, borderTop: '1px solid #333', paddingTop: 8, display: 'grid', gap: 6 }}>
+            <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.5 }}>
+              파츠를 뗀 자리를 AI가 채웁니다 (메시 모드 바닥층). <b style={{ color: '#ffb454' }}>이미지 모델은 유료</b>라 누를 때마다 비용이 들 수 있어요.
+            </div>
+            <label style={{ fontSize: 12 }}>
+              이미지 모델
+              <input type="text" value={aiImgModel} onChange={(e) => setAiImgModel(e.target.value)} style={{ width: '100%' }} />
+            </label>
+            <button className="btn" onClick={runAiHoleFill} disabled={aiHoleBusy || !assets.some((a) => a.poly)}>
+              {aiHoleBusy ? '복원 중...' : '🧩 AI로 구멍 복원 (유료·실험)'}
+            </button>
+            {aiHoleCanvas && (
+              <button className="btn ghost" onClick={() => { setAiHole(null); setAiHoleMsg('') }}>
+                기본 복원으로 되돌리기
+              </button>
+            )}
+            {aiHoleMsg && <span style={{ fontSize: 11, color: aiHoleMsg.startsWith('❌') ? '#ff6b6b' : '#3ddc84' }}>{aiHoleMsg}</span>}
+          </div>
           {aiStatus && (
             <span style={{ fontSize: '11px', color: aiStatus.startsWith('❌') ? '#ff6b6b' : '#3ddc84', marginTop: '4px' }}>
               {aiStatus}

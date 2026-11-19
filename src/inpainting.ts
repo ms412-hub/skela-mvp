@@ -109,6 +109,32 @@ export function fillHole(
   return { strategy: 'diffuse', filled: fillMasked(rgba, mask, w, h) }
 }
 
+// 비동기 분배기: 외부 AI(네트워크)를 쓸 수 있는 버전. 기존 fillHole은 그대로 두고, 'ai'로 정해졌을 때만 aiFillAsync를 기다린다.
+// aiFillAsync가 실패(false/예외)해도 rgba는 바뀌지 않고, 브라우저 안에서 되는 방법(patch)으로 이어서 채운다.
+export async function fillHoleAsync(
+  rgba: Uint8ClampedArray,
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  o: Omit<FillOptions, 'aiFill'> & { aiFillAsync?: (rgba: Uint8ClampedArray, mask: Uint8Array, w: number, h: number) => Promise<boolean> } = {},
+): Promise<{ strategy: FillStrategy; filled: number }> {
+  const stats = analyzeHole(rgba, mask, w, h)
+  if (stats.area === 0 || stats.area === w * h) return { strategy: 'diffuse', filled: 0 }
+  const s: FillStrategy = o.strategy ?? chooseStrategy(stats, o)
+  if (s === 'ai' && o.aiFillAsync) {
+    const work = rgba.slice() // 실패해도 원본이 망가지지 않게 복사본에서 시도
+    let ok = false
+    try { ok = await o.aiFillAsync(work, mask, w, h) } catch { ok = false }
+    if (ok) {
+      rgba.set(work)
+      return { strategy: 'ai', filled: stats.area }
+    }
+  }
+  const { aiFillAsync: _unused, ...rest } = o
+  void _unused
+  return fillHole(rgba, mask, w, h, { ...rest, strategy: s === 'ai' ? 'patch' : s })
+}
+
 // 예시 기반 복원 (Criminisi 방식을 줄인 것): 채울 가장자리 중 "알려진 비율이 높고 무늬가 이어지는" 곳부터,
 // 주변에서 가장 닮은 조각을 찾아 모자란 픽셀만 복사한다. 반환: 채운 픽셀 수 (조각이 없으면 0, 아무것도 바꾸지 않음)
 export function fillPatch(rgba: Uint8ClampedArray, mask: Uint8Array, w: number, h: number, r = 4): number {
