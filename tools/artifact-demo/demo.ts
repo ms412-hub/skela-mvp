@@ -51,6 +51,15 @@ let tex: THREE.Texture
 let mesh: THREE.Mesh
 let paint: THREE.Mesh
 
+/* ───── 파츠: 영역을 오려 뼈에 붙이기 ───── */
+type Part = { id: number; name: string; poly: P[]; canvas: HTMLCanvasElement; cx: number; cy: number; anchor: string; mesh: THREE.Mesh }
+let parts: Part[] = []
+let baseImg: HTMLImageElement | null = null
+let texCanvas: HTMLCanvasElement | null = null
+let selectMode = false
+let lasso: P[] = []
+let partSeq = 0
+
 const stage = $('stage')
 const gl = $('gl') as HTMLCanvasElement
 const ov = $('ov') as HTMLCanvasElement
@@ -135,6 +144,7 @@ function rebuild() {
   update()
 }
 function loadCharacter(name: string) {
+  setSelect(false)
   who = name
   const d = DATA[name]
   W = d.w
@@ -151,12 +161,9 @@ function loadCharacter(name: string) {
     const cx = cv.getContext('2d')!
     cx.drawImage(img, 0, 0, W, H)
     fgMask = foregroundMask(cx.getImageData(0, 0, W, H).data, W, H)
-    tex?.dispose()
-    tex = new THREE.Texture(img)
-    tex.colorSpace = THREE.SRGBColorSpace
-    tex.needsUpdate = true
-    ;(mesh.material as THREE.MeshBasicMaterial).map = tex
-    ;(mesh.material as THREE.MeshBasicMaterial).needsUpdate = true
+    baseImg = img
+    clearParts()
+    refreshTex()
     cam.left = -W / 2
     cam.right = W / 2
     cam.top = H / 2
@@ -180,6 +187,7 @@ function update() {
   pos.needsUpdate = true
   geom.setDrawRange(0, r.drawCount)
   geom.computeBoundingSphere()
+  parts.forEach(placePart)
   renderer.render(scene, cam)
   drawOverlay()
   $('s-folds').textContent = String(r.folds)
@@ -192,6 +200,7 @@ function drawOverlay() {
   const k = ov.width / W
   octx.clearRect(0, 0, ov.width, ov.height)
   if (capturing) return
+  if (selectMode) { drawLasso(); return }
   if (editMode) { drawEdit(); return }
   const X = (p: P) => (p.x + W / 2) * k
   const Y = (p: P) => (H / 2 - p.y) * k
@@ -272,6 +281,12 @@ const toImg = (e: PointerEvent): P => {
   return { x: Math.min(W - 2, Math.max(2, q.x + W / 2)), y: Math.min(H - 2, Math.max(2, H / 2 - q.y)) }
 }
 ov.addEventListener('pointerdown', (e) => {
+  if (selectMode) {
+    lasso = [toImg(e)]
+    ov.setPointerCapture(e.pointerId)
+    drawOverlay()
+    return
+  }
   if (editMode) {
     const q = toImg(e)
     let best: number | null = null
@@ -309,6 +324,10 @@ ov.addEventListener('pointerdown', (e) => {
   update()
 })
 ov.addEventListener('pointermove', (e) => {
+  if (selectMode) {
+    if (lasso.length) { lasso.push(toImg(e)); drawOverlay() }
+    return
+  }
   if (editMode) {
     if (editId === null) return
     const q = toImg(e)
@@ -345,6 +364,13 @@ ov.addEventListener('pointermove', (e) => {
   update()
 })
 const endDrag = () => {
+  if (selectMode) {
+    const poly = lasso
+    lasso = []
+    if (poly.length > 2) addPart(poly)
+    drawOverlay()
+    return
+  }
   if (editMode) {
     if (editId !== null) { editId = null; angles = {}; rebuild() } // 점을 놓으면 메시를 새 골격으로 다시 만든다
     return
@@ -354,6 +380,172 @@ const endDrag = () => {
 }
 ov.addEventListener('pointerup', endDrag)
 ov.addEventListener('pointercancel', endDrag)
+
+function polyArea(poly: P[]) {
+  return Math.abs(poly.reduce((a, q, i) => { const n = poly[(i + 1) % poly.length]; return a + (q.x * n.y - n.x * q.y) }, 0) / 2)
+}
+function tracePoly(c: CanvasRenderingContext2D, poly: P[], ox = 0, oy = 0) {
+  c.beginPath()
+  poly.forEach((q, i) => (i ? c.lineTo(q.x - ox, q.y - oy) : c.moveTo(q.x - ox, q.y - oy)))
+  c.closePath()
+}
+// 메시 텍스처: 원본에서 파츠로 오려낸 자리를 투명하게 비운다 (배경색으로 채우면 그 덩어리가 팔다리와 함께 끌려간다)
+function refreshTex() {
+  if (!baseImg) return
+  const c = document.createElement('canvas')
+  c.width = W
+  c.height = H
+  const x = c.getContext('2d')!
+  x.drawImage(baseImg, 0, 0, W, H)
+  x.globalCompositeOperation = 'destination-out'
+  x.lineWidth = 3
+  for (const p of parts) { tracePoly(x, p.poly); x.fill(); x.stroke() }
+  texCanvas = c
+  tex?.dispose()
+  tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  const mat = mesh.material as THREE.MeshBasicMaterial
+  mat.map = tex
+  mat.needsUpdate = true
+}
+function clearParts() {
+  for (const p of parts) { scene.remove(p.mesh); p.mesh.geometry.dispose(); ;((p.mesh.material as THREE.MeshBasicMaterial).map as THREE.Texture).dispose() }
+  parts = []
+  renderPartsUI()
+}
+// 붙일 수 있는 뼈: 팔은 윗팔/아래팔/손, 다리는 허벅지/종아리/발
+const SEG_NAME: Record<string, Record<string, string>> = {
+  arm: { up: '윗팔', lo: '아래팔', end: '손' },
+  leg: { up: '허벅지', lo: '종아리', end: '발' },
+}
+function anchorOptions() {
+  const o = [{ v: 'fixed', label: '고정 (몸통)' }]
+  for (const ch of CHAINS) for (const sg of ['up', 'lo', 'end']) o.push({ v: ch.key + ':' + sg, label: ch.label + ' ' + SEG_NAME[ch.kind][sg] })
+  return o
+}
+function segPts(ch: (typeof CHAINS)[number], sg: string) {
+  const r = [w2(rest[ch.ids[0]]), w2(rest[ch.ids[1]]), w2(rest[ch.ids[2]]), tip0(ch)]
+  const s = posed(ch)
+  const q = [s.a, s.m, s.e, s.tip]
+  const [i, j] = sg === 'up' ? [0, 1] : sg === 'lo' ? [1, 2] : [2, 3]
+  return { r0: r[i], r1: r[j], q0: q[i], q1: q[j] }
+}
+const distSeg = (p: P, a: P, b: P) => {
+  const dx = b.x - a.x, dy = b.y - a.y
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)))
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+}
+// 가장 가까운 뼈에 자동으로 붙인다. 어느 뼈와도 멀면 고정
+function autoAnchor(c: P) {
+  let best = 'fixed'
+  let bd = Math.max(70, W * 0.1)
+  for (const ch of CHAINS) for (const sg of ['up', 'lo', 'end']) {
+    const g = segPts(ch, sg)
+    const d = distSeg(c, g.r0, g.r1)
+    if (d < bd) { bd = d; best = ch.key + ':' + sg }
+  }
+  return best
+}
+// 파츠를 붙은 뼈의 움직임(회전+이동)대로 통째로 옮긴다
+function placePart(pt: Part) {
+  const c = w2({ x: pt.cx, y: pt.cy })
+  if (pt.anchor === 'fixed') { pt.mesh.position.set(c.x, c.y, 0.01); pt.mesh.rotation.z = 0; return }
+  const [key, sg] = pt.anchor.split(':')
+  const g = segPts(CHAINS.find((x) => x.key === key)!, sg)
+  const th = Math.atan2(g.q1.y - g.q0.y, g.q1.x - g.q0.x) - Math.atan2(g.r1.y - g.r0.y, g.r1.x - g.r0.x)
+  const dx = c.x - g.r0.x, dy = c.y - g.r0.y
+  pt.mesh.position.set(g.q0.x + dx * Math.cos(th) - dy * Math.sin(th), g.q0.y + dx * Math.sin(th) + dy * Math.cos(th), 0.01)
+  pt.mesh.rotation.z = th
+}
+function addPart(poly: P[]) {
+  if (!texCanvas) return
+  if (polyArea(poly) < 100) { $('part-msg').textContent = '영역이 너무 작아요. 파츠 둘레를 따라 크게 그려주세요.'; return }
+  const xs = poly.map((q) => q.x), ys = poly.map((q) => q.y)
+  const x0 = Math.max(0, Math.floor(Math.min(...xs))), y0 = Math.max(0, Math.floor(Math.min(...ys)))
+  const x1 = Math.min(W, Math.ceil(Math.max(...xs))), y1 = Math.min(H, Math.ceil(Math.max(...ys)))
+  const bw = Math.max(1, x1 - x0), bh = Math.max(1, y1 - y0)
+  const cv = document.createElement('canvas')
+  cv.width = bw
+  cv.height = bh
+  const cx2 = cv.getContext('2d')!
+  tracePoly(cx2, poly, x0, y0)
+  cx2.clip()
+  cx2.drawImage(texCanvas, -x0, -y0, W, H) // 이미 오려낸 파츠가 있으면 그 자리는 제외된 이미지에서 오림
+  const t = new THREE.CanvasTexture(cv)
+  t.colorSpace = THREE.SRGBColorSpace
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(bw, bh), new THREE.MeshBasicMaterial({ map: t, transparent: true, depthWrite: false, toneMapped: false }))
+  m.frustumCulled = false
+  scene.add(m)
+  const cx = x0 + bw / 2, cy = y0 + bh / 2
+  const anchor = autoAnchor(w2({ x: cx, y: cy }))
+  parts.push({ id: ++partSeq, name: '파츠 ' + partSeq, poly, canvas: cv, cx, cy, anchor, mesh: m })
+  refreshTex()
+  renderPartsUI()
+  $('part-msg').textContent = '✅ 파츠를 만들었어요. 가까운 뼈에 자동으로 붙였습니다. 아래에서 바꿀 수 있어요.'
+  setSelect(false)
+  update()
+}
+function renderPartsUI() {
+  const box = document.getElementById('parts-list')
+  if (!box) return
+  box.textContent = ''
+  for (const p of parts) {
+    const row = document.createElement('div')
+    row.className = 'part-row'
+    const nm = document.createElement('span')
+    nm.textContent = p.name
+    const sel = document.createElement('select')
+    sel.setAttribute('aria-label', p.name + ' 붙일 뼈')
+    for (const o of anchorOptions()) { const op = document.createElement('option'); op.value = o.v; op.textContent = o.label; sel.appendChild(op) }
+    sel.value = p.anchor
+    sel.addEventListener('change', () => { p.anchor = sel.value; update() })
+    const del = document.createElement('button')
+    del.className = 'btn'
+    del.textContent = '삭제'
+    del.addEventListener('click', () => {
+      scene.remove(p.mesh)
+      p.mesh.geometry.dispose()
+      parts = parts.filter((q) => q !== p)
+      refreshTex()
+      renderPartsUI()
+      update()
+    })
+    row.append(nm, sel, del)
+    box.appendChild(row)
+  }
+}
+function setSelect(on: boolean) {
+  selectMode = on
+  lasso = []
+  if (on) {
+    if (editMode) setEdit(false)
+    angles = {} // 올가미는 원래 자세의 그림 위에서만 맞다
+    $('part-msg').textContent = '그림 위에서 파츠 둘레를 따라 드래그하세요. 손을 떼면 그 영역이 파츠가 됩니다.'
+    update()
+  }
+  const b = document.getElementById('sel-btn')
+  if (b) {
+    b.textContent = on ? '선택 중… (취소하려면 다시 클릭)' : '✂ 이미지 영역 선택'
+    b.classList.toggle('primary', !on)
+  }
+  ov.style.cursor = on ? 'crosshair' : 'grab'
+  if (W) drawOverlay()
+}
+function drawLasso() {
+  if (lasso.length < 2) return
+  const k = ov.width / W
+  octx.beginPath()
+  lasso.forEach((q, i) => (i ? octx.lineTo(q.x * k, q.y * k) : octx.moveTo(q.x * k, q.y * k)))
+  octx.closePath()
+  octx.fillStyle = 'rgba(91,61,245,.18)'
+  octx.fill()
+  octx.lineWidth = Math.max(2, ov.width / 300)
+  octx.setLineDash([8, 6])
+  octx.strokeStyle = '#5b3df5'
+  octx.stroke()
+  octx.setLineDash([])
+}
+document.getElementById('sel-btn')?.addEventListener('click', () => setSelect(!selectMode))
 
 /* ───── 버튼 ───── */
 function flip(key: string) {
@@ -401,6 +593,7 @@ seg('algo', algo, (v) => {
   rebuild()
 })
 function setEdit(on: boolean) {
+  if (on && selectMode) setSelect(false)
   editMode = on
   editId = null
   $<HTMLInputElement>('edit').checked = on
@@ -471,7 +664,7 @@ $<HTMLInputElement>('parts').addEventListener('change', (e) => {
 }
 
 /* ───── 시작 ───── */
-mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ side: THREE.FrontSide, toneMapped: false })) // 접혀 뒤집힌 삼각형(뒷면)은 그리지 않음
+mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ side: THREE.FrontSide, toneMapped: false, transparent: true, depthWrite: false })) // 접혀 뒤집힌 삼각형(뒷면)은 그리지 않음
 mesh.frustumCulled = false
 paint = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.FrontSide, toneMapped: false }))
 paint.frustumCulled = false
