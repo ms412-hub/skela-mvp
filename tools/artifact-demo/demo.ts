@@ -6,6 +6,7 @@ import {
 } from '../../src/meshSkin'
 import type { RestChain, ForegroundMask } from '../../src/meshSkin'
 import { defaultSkeleton } from '../../src/defaultSkeleton'
+import { fillMasked } from '../../src/holeFill'
 import { buildSkin as buildLegacy, deformSkin as deformLegacy } from './legacy/meshSkinLegacy'
 
 type P = { x: number; y: number }
@@ -50,6 +51,7 @@ let geom: THREE.BufferGeometry
 let tex: THREE.Texture
 let mesh: THREE.Mesh
 let paint: THREE.Mesh
+let under: THREE.Mesh // 파츠로 뗀 자리를 주변 색으로 메운 고정 바닥층 (메시 아래, 변형되지 않음)
 
 /* ───── 파츠: 영역을 오려 뼈에 붙이기 ───── */
 type Part = { id: number; name: string; poly: P[]; canvas: HTMLCanvasElement; cx: number; cy: number; anchor: string; mesh: THREE.Mesh }
@@ -407,6 +409,40 @@ function refreshTex() {
   const mat = mesh.material as THREE.MeshBasicMaterial
   mat.map = tex
   mat.needsUpdate = true
+  refreshUnder()
+}
+// 떼어낸 자리를 주변 색으로 메워 바닥층에 깐다. 메시의 그 자리는 비어 있어서, 팔다리가 움직여 떠나면 이 색이 보인다.
+function refreshUnder() {
+  const um = under.material as THREE.MeshBasicMaterial
+  um.map?.dispose()
+  um.map = null
+  under.visible = parts.length > 0 && !!baseImg
+  if (!under.visible) { um.needsUpdate = true; return }
+  const mc = document.createElement('canvas')
+  mc.width = W
+  mc.height = H
+  const mx = mc.getContext('2d')!
+  mx.fillStyle = '#000'
+  mx.strokeStyle = '#000'
+  mx.lineWidth = 3
+  for (const p of parts) { tracePoly(mx, p.poly); mx.fill(); mx.stroke() }
+  const ma = mx.getImageData(0, 0, W, H).data
+  const mask = new Uint8Array(W * H)
+  for (let i = 0; i < mask.length; i++) mask[i] = ma[i * 4 + 3] > 0 ? 1 : 0
+  const c = document.createElement('canvas')
+  c.width = W
+  c.height = H
+  const x = c.getContext('2d')!
+  x.drawImage(baseImg!, 0, 0, W, H)
+  const img = x.getImageData(0, 0, W, H)
+  fillMasked(img.data, mask, W, H)
+  for (let i = 0; i < mask.length; i++) if (!mask[i]) img.data[i * 4 + 3] = 0 // 구멍 밖은 투명 (원래 그림이 겹쳐 보이면 안 된다)
+  x.putImageData(img, 0, 0)
+  const t = new THREE.CanvasTexture(c)
+  t.colorSpace = THREE.SRGBColorSpace
+  um.map = t
+  um.needsUpdate = true
+  under.scale.set(W, H, 1)
 }
 function clearParts() {
   for (const p of parts) { scene.remove(p.mesh); p.mesh.geometry.dispose(); ;((p.mesh.material as THREE.MeshBasicMaterial).map as THREE.Texture).dispose() }
@@ -670,7 +706,11 @@ paint = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({
 paint.frustumCulled = false
 paint.visible = false
 paint.position.z = 0.02
-scene.add(mesh, paint)
+under = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, toneMapped: false }))
+under.frustumCulled = false
+under.position.z = -0.01
+under.visible = false
+scene.add(under, mesh, paint)
 renderer.setClearColor(0xffffff, 1)
 new ResizeObserver(resize).observe(stage)
 loadCharacter(who)

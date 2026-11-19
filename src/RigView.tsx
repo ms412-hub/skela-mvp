@@ -11,6 +11,7 @@ import {
 } from './meshSkin'
 import type { DeformStats } from './meshSkin'
 import { cleanSource } from './jointMerge'
+import { fillMasked } from './holeFill'
 
 type Pt = { id: number; name: string; x: number; y: number; source?: 'auto' | 'manual' }
 type P = { x: number; y: number }
@@ -117,7 +118,8 @@ function cutPart(img: CanvasImageSource, W: number, H: number, poly: P[]) {
   return { canvas, bw, bh, cx: x0 + bw / 2, cy: y0 + bh / 2 }
 }
 
-// 원본에서 사용자가 오려낸 파츠 영역을 배경색으로 지운 이미지 (중복 노출 방지)
+// 원본에서 사용자가 오려낸 파츠 영역을 주변 색으로 메운 이미지 (중복 노출 방지).
+// hole: 메운 자리만 불투명하고 나머지는 투명한 층. 메시 모드에서 변형되지 않는 바닥층으로 쓴다.
 function eraseParts(img: HTMLImageElement, W: number, H: number, polys: P[][]) {
   const c = document.createElement('canvas')
   c.width = W
@@ -126,15 +128,42 @@ function eraseParts(img: HTMLImageElement, W: number, H: number, polys: P[][]) {
   ctx.drawImage(img, 0, 0, W, H)
   const [r, g, b] = ctx.getImageData(2, 2, 1, 1).data
   const bg = `rgb(${r},${g},${b})`
-  ctx.fillStyle = bg
-  ctx.strokeStyle = bg
-  ctx.lineWidth = 4
+  if (!polys.length) return { canvas: c, bg, hole: null as HTMLCanvasElement | null }
+  const mc = document.createElement('canvas')
+  mc.width = W
+  mc.height = H
+  const mx = mc.getContext('2d')!
+  mx.fillStyle = '#000'
+  mx.strokeStyle = '#000'
+  mx.lineWidth = 4
   for (const poly of polys) {
-    tracePath(ctx, poly)
-    ctx.fill()
-    ctx.stroke()
+    tracePath(mx, poly)
+    mx.fill()
+    mx.stroke()
   }
-  return { canvas: c, bg }
+  const ma = mx.getImageData(0, 0, W, H).data
+  const mask = new Uint8Array(W * H)
+  for (let i = 0; i < mask.length; i++) mask[i] = ma[i * 4 + 3] > 0 ? 1 : 0
+  const id = ctx.getImageData(0, 0, W, H)
+  if (fillMasked(id.data, mask, W, H) === 0) {
+    // 메울 색이 없는 경우(영역이 그림 전체): 예전처럼 배경색으로 덮는다
+    ctx.fillStyle = bg
+    ctx.strokeStyle = bg
+    ctx.lineWidth = 4
+    for (const poly of polys) {
+      tracePath(ctx, poly)
+      ctx.fill()
+      ctx.stroke()
+    }
+    return { canvas: c, bg, hole: null as HTMLCanvasElement | null }
+  }
+  ctx.putImageData(id, 0, 0)
+  for (let i = 0; i < mask.length; i++) if (!mask[i]) id.data[i * 4 + 3] = 0
+  const hc = document.createElement('canvas')
+  hc.width = W
+  hc.height = H
+  hc.getContext('2d')!.putImageData(id, 0, 0)
+  return { canvas: c, bg, hole: hc }
 }
 
 // 메시 텍스처용: 파츠로 오려낸 영역을 투명하게 비운다.
@@ -215,7 +244,7 @@ function buildRig(
     }
   })
 
-  return { base, bg, limbs, src: srcImg, meshSrc: partPolys.length ? clearParts(srcImg, W, H, partPolys) : srcImg }
+  return { base, bg, limbs, src: srcImg, hole: erased.hole, meshSrc: partPolys.length ? clearParts(srcImg, W, H, partPolys) : srcImg }
 }
 
 function mkTex(c: HTMLCanvasElement) {
@@ -552,12 +581,18 @@ type MeshBackend = {
 type MeshStats = DeformStats & { ms: number }
 
 function DeformMesh({
+  holeTex,
+  W,
+  H,
   backend,
   tex,
   angles,
   onStats,
   showParts,
 }: {
+  holeTex: THREE.Texture | null
+  W: number
+  H: number
   backend: MeshBackend
   tex: THREE.Texture
   angles: Record<string, number>
@@ -586,6 +621,13 @@ function DeformMesh({
   }, [geom, backend, angles, onStats])
   return (
     <>
+      {/* 파츠로 뗀 자리를 주변 색으로 메운 고정 바닥층: 메시의 그 자리는 비어 있어서, 팔다리가 떠나면 이 색이 보인다 */}
+      {holeTex && (
+        <mesh position={[0, 0, -0.01]} frustumCulled={false}>
+          <planeGeometry args={[W, H]} />
+          <meshBasicMaterial map={holeTex} transparent depthWrite={false} toneMapped={false} />
+        </mesh>
+      )}
       <mesh geometry={geom} frustumCulled={false}>
         {/* FrontSide: 접혀 뒤집힌 삼각형(천의 뒷면)은 그리지 않는다. 그리는 순서는 deformSkin이 이동량 순으로 정렬해 준다 */}
         <meshBasicMaterial map={tex} transparent depthWrite={false} toneMapped={false} side={THREE.FrontSide} />
@@ -953,6 +995,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
       project: (prev, cand, pin) => projectPose(sk, chains, lim, prev, cand, pin),
     }
   }, [meshMode, pts, width, height, armHW, legHW, fgMask])
+  const holeTex = useMemo(() => (meshMode && rig.hole ? mkTex(rig.hole) : null), [meshMode, rig])
   const meshTex = useMemo(() => (meshMode ? mkTex(rig.meshSrc) : null), [meshMode, rig])
 
   const guideUrl = useMemo(
@@ -1150,7 +1193,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
 
             {meshMode && backend && meshTex ? (
               <>
-                <DeformMesh backend={backend} tex={meshTex} angles={angles} onStats={setStats} showParts={showParts && !capturing} />
+                <DeformMesh holeTex={holeTex} W={width} H={height} backend={backend} tex={meshTex} angles={angles} onStats={setStats} showParts={showParts && !capturing} />
                 {!capturing && <JointHandles pts={pts} W={width} H={height} angles={angles} setAngles={setAngles} project={backend.project} />}
               </>
             ) : (
