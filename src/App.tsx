@@ -5,6 +5,7 @@ import { normalizeTips } from './meshSkin'
 import { CUSTOM_MIN, mergeDetected, moveJoint, resetToAuto, countManual } from './jointMerge'
 import type { JointPt } from './jointMerge'
 import { defaultSkeleton } from './defaultSkeleton'
+import { detectWithPadding } from './poseDetect'
 
 const MP_VERSION = '1.2.0'
 const WASM_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`
@@ -159,9 +160,10 @@ export default function App() {
       setStatus('관절 찾는 중...')
       const canvas = canvasRef.current!
       drawBase()
-      const result = landmarker.detect(canvas)
+      // 그림 주변에 여백을 붙여 여러 번 추정하고 신뢰도가 가장 높은 결과를 쓴다 (가장자리에 붙은 캐릭터 대응)
+      const best = detectWithPadding({ detect: (c) => landmarker.detect(c as HTMLCanvasElement) }, canvas)
 
-      if (result.landmarks.length === 0) {
+      if (!best) {
         // 이미 작업한 관절이 있으면 지우지 않는다
         setStatus(
           pts
@@ -172,11 +174,11 @@ export default function App() {
         return
       }
 
-      const lm = result.landmarks[0]
+      const lm = best.points
       const found: Pt[] = normalizeTips(JOINTS.map((j) => ({
         ...j,
-        x: lm[j.id].x * canvas.width,
-        y: lm[j.id].y * canvas.height,
+        x: lm[j.id].x,
+        y: lm[j.id].y,
       })), { w: canvas.width, h: canvas.height })
       originalRef.current = found.map((p) => ({ ...p, source: 'auto' as const })) // "원래 추정값으로"의 기준은 항상 가장 최근 자동 추정
       const merged = mergeDetected(pts, found, { discardManual })
