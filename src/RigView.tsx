@@ -137,6 +137,24 @@ function eraseParts(img: HTMLImageElement, W: number, H: number, polys: P[][]) {
   return { canvas: c, bg }
 }
 
+// 메시 텍스처용: 파츠로 오려낸 영역을 투명하게 비운다.
+// 배경색으로 채우면 그 덩어리가 팔다리와 함께 끌려가 몸 위에 흰 얼룩으로 남고, 파츠와 메시가 같은 팔을 두 번 그리게 된다.
+function clearParts(src: CanvasImageSource, W: number, H: number, polys: P[][]) {
+  const c = document.createElement('canvas')
+  c.width = W
+  c.height = H
+  const ctx = c.getContext('2d')!
+  ctx.drawImage(src, 0, 0, W, H)
+  ctx.globalCompositeOperation = 'destination-out'
+  ctx.lineWidth = 4
+  for (const poly of polys) {
+    tracePath(ctx, poly)
+    ctx.fill()
+    ctx.stroke()
+  }
+  return c
+}
+
 function buildRig(
   img: HTMLImageElement,
   W: number,
@@ -197,7 +215,7 @@ function buildRig(
     }
   })
 
-  return { base, bg, limbs, src: srcImg }
+  return { base, bg, limbs, src: srcImg, meshSrc: partPolys.length ? clearParts(srcImg, W, H, partPolys) : srcImg }
 }
 
 function mkTex(c: HTMLCanvasElement) {
@@ -935,7 +953,7 @@ export default function RigView({ img, width, height, pts, links, onPtsLoad, onL
       project: (prev, cand, pin) => projectPose(sk, chains, lim, prev, cand, pin),
     }
   }, [meshMode, pts, width, height, armHW, legHW, fgMask])
-  const meshTex = useMemo(() => (meshMode ? mkTex(rig.src) : null), [meshMode, rig])
+  const meshTex = useMemo(() => (meshMode ? mkTex(rig.meshSrc) : null), [meshMode, rig])
 
   const guideUrl = useMemo(
     () => renderGuide(pts, width, height, angles, links).toDataURL('image/png'),
