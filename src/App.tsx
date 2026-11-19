@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
 import RigView from './RigView'
+import CharacterEditor from './editor/CharacterEditor'
 import { normalizeTips } from './meshSkin'
 import { CUSTOM_MIN, mergeDetected, moveJoint, resetToAuto, countManual } from './jointMerge'
 import type { JointPt } from './jointMerge'
@@ -58,7 +59,7 @@ export default function App() {
   const [status, setStatus] = useState('')
   const [pts, setPts] = useState<Pt[] | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
-  const [mode, setMode] = useState<'edit' | 'rig'>('edit')
+  const [mode, setMode] = useState<'edit' | 'rig' | 'editor'>('edit')
   const [links, setLinks] = useState<[number, number][]>([]) // 사용자가 만든 추가 연결
   const [tool, setTool] = useState<Tool>('move')
 
@@ -355,6 +356,16 @@ export default function App() {
             onLinksLoad={setLinks}
           />
         )}
+
+        {mode === 'editor' && pts && imgRef.current && canvasRef.current && (
+          <CharacterEditor
+            img={imgRef.current}
+            width={canvasRef.current.width}
+            height={canvasRef.current.height}
+            pts={pts}
+            onExit={() => setMode('edit')}
+          />
+        )}
       </main>
 
       <footer className="bottombar">
@@ -394,6 +405,9 @@ export default function App() {
           disabled={!pts}
         >
           {mode === 'edit' ? '리그 보기 →' : '← 점 편집으로'}
+        </button>
+        <button className="btn" onClick={() => setMode('editor')} disabled={!pts || mode === 'editor'} title="파츠를 오브젝트로 선택해 이동·회전·크기를 바꾸는 Unity 방식 편집기">
+          캐릭터 에디터 →
         </button>
         <span className="status">{status}</span>
       </footer>
