@@ -9,7 +9,7 @@ import { drawOrder, hitTest, moveByWorld, pivotWorld, setPivotKeepPlace, updateP
 import { apply, applyLinear, invert } from '../character/Transform'
 import type { Mat, Vec2 } from '../character/Transform'
 
-export type Tool = 'move' | 'rotate' | 'scale' | 'pivot'
+export type Tool = 'move' | 'rotate' | 'scale' | 'pivot' | 'paint'
 export type SceneApi = { frameAll: () => void; frameSelection: () => void }
 
 type Props = {
@@ -23,6 +23,9 @@ type Props = {
   onLive: (s: EditorState) => void // 드래그 중
   onCommit: (s: EditorState) => void // 드래그 끝 (되돌리기 한 단계)
   apiRef: { current: SceneApi | null }
+  // 경계 수정(브러시): 원래 자세 위에 파츠별 색(overlay, 원본 이미지 크기)을 겹쳐 그리고, 칠한 점을 알려 준다
+  paint?: { overlay: CanvasImageSource | null; radius: number; onStroke: (phase: 'start' | 'move' | 'end', p: Vec2) => void }
+  overlayTick?: number // overlay가 바뀌면 다시 그리기
 }
 
 const GIZMO = 80 // 기즈모 길이(px)
@@ -34,6 +37,7 @@ type Drag =
   | { kind: 'rotate'; start: number; base: EditorState; ids: string[]; P: Vec2; moved: boolean }
   | { kind: 'scale'; axis: 'x' | 'y' | 'uni'; sx: number; sy: number; base: EditorState; id: string; P: Vec2; dir: Vec2; moved: boolean }
   | { kind: 'pivot'; base: EditorState; id: string; moved: boolean }
+  | { kind: 'paint' }
 
 export default function SceneView(p: Props) {
   const wrap = useRef<HTMLDivElement>(null)
@@ -44,6 +48,7 @@ export default function SceneView(p: Props) {
   const drag = useRef<Drag | null>(null)
   const size = useRef({ w: 1, h: 1, dpr: 1 })
   const fitted = useRef(false)
+  const hover = useRef<Vec2 | null>(null) // 브러시 커서 (화면 좌표)
 
   const toScreen = (q: Vec2): Vec2 => ({ x: (q.x - cam.current.x) * cam.current.zoom + size.current.w / 2, y: (q.y - cam.current.y) * cam.current.zoom + size.current.h / 2 })
   const toWorld = (q: Vec2): Vec2 => ({ x: (q.x - size.current.w / 2) / cam.current.zoom + cam.current.x, y: (q.y - size.current.h / 2) / cam.current.zoom + cam.current.y })
@@ -84,6 +89,7 @@ export default function SceneView(p: Props) {
     if (!c) return
     const { char, state, selection, tool, showJoints } = props.current
     const { w, h, dpr } = size.current
+    c.style.cursor = tool === 'paint' ? 'none' : 'default'
     const ctx = c.getContext('2d')!
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.fillStyle = '#25272f'
@@ -101,7 +107,13 @@ export default function SceneView(p: Props) {
       const m = W[id]
       // 화면 행렬 = view · world
       ctx.setTransform(dpr * z * m[0], dpr * z * m[1], dpr * z * m[2], dpr * z * m[3], dpr * (z * m[4] + view[4]), dpr * (z * m[5] + view[5]))
-      ctx.drawImage(d.image, 0, 0)
+      ctx.drawImage(d.image, d.origin.x, d.origin.y) // 로컬 좌표 = 원본 이미지 좌표
+    }
+    if (tool === 'paint' && props.current.paint?.overlay) {
+      ctx.setTransform(dpr * view[0], 0, 0, dpr * view[3], dpr * view[4], dpr * view[5])
+      ctx.imageSmoothingEnabled = false
+      ctx.drawImage(props.current.paint.overlay, 0, 0)
+      ctx.imageSmoothingEnabled = true
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     // 테두리
@@ -145,6 +157,18 @@ export default function SceneView(p: Props) {
       }
     })
 
+    // 브러시 커서
+    if (tool === 'paint') {
+      if (hover.current && props.current.paint) {
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 1.5
+        ctx.beginPath(); ctx.arc(hover.current.x, hover.current.y, props.current.paint.radius * z, 0, Math.PI * 2); ctx.stroke()
+        ctx.strokeStyle = '#000'
+        ctx.lineWidth = 1
+        ctx.beginPath(); ctx.arc(hover.current.x, hover.current.y, props.current.paint.radius * z + 1.5, 0, Math.PI * 2); ctx.stroke()
+      }
+      return
+    }
     // 기즈모
     const g = gizmo(state, W)
     if (!g) return
@@ -245,6 +269,11 @@ export default function SceneView(p: Props) {
         return
       }
       const pr = props.current
+      // 경계 수정: 왼쪽 버튼으로 칠한다
+      if (pr.tool === 'paint') {
+        if (pr.paint) { drag.current = { kind: 'paint' }; pr.paint.onStroke('start', toWorld(q)) }
+        return
+      }
       // 1) 기즈모
       const g = hitGizmo(q, pr.state)
       if (g) {
@@ -272,10 +301,12 @@ export default function SceneView(p: Props) {
       drag.current = { kind: 'pan', sx: q.x, sy: q.y, cx: cam.current.x, cy: cam.current.y }
     }
     const onMove = (e: PointerEvent) => {
+      const q = local(e)
+      if (props.current.tool === 'paint') { hover.current = q; if (!drag.current) draw() }
       const d = drag.current
       if (!d) return
-      const q = local(e)
       const pr = props.current
+      if (d.kind === 'paint') { pr.paint?.onStroke('move', toWorld(q)); return }
       if (d.kind === 'pan') {
         cam.current.x = d.cx - (q.x - d.sx) / cam.current.zoom
         cam.current.y = d.cy - (q.y - d.sy) / cam.current.zoom
@@ -314,9 +345,12 @@ export default function SceneView(p: Props) {
       const d = drag.current
       drag.current = null
       if (c.hasPointerCapture(e.pointerId)) c.releasePointerCapture(e.pointerId)
-      if (d && d.kind !== 'pan' && d.moved) props.current.onCommit(props.current.state)
+      if (d?.kind === 'paint') { props.current.paint?.onStroke('end', toWorld(local(e))); return }
+      if (d && d.kind !== 'pan' && 'moved' in d && d.moved) props.current.onCommit(props.current.state)
     }
     const noMenu = (e: Event) => e.preventDefault()
+    const onLeave = () => { hover.current = null; draw() }
+    c.addEventListener('pointerleave', onLeave)
     c.addEventListener('wheel', onWheel, { passive: false })
     c.addEventListener('pointerdown', onDown)
     c.addEventListener('pointermove', onMove)

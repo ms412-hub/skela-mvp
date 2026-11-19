@@ -13,13 +13,14 @@ const close = (a: number, b: number, eps = 1e-6) => assert.ok(Math.abs(a - b) < 
 const closeP = (p: { x: number; y: number }, q: { x: number; y: number }, eps = 1e-6) => { close(p.x, q.x, eps); close(p.y, q.y, eps) }
 
 const part = (o: Partial<PartState>): PartState => ({ position: { x: 0, y: 0 }, rotation: 0, scale: { x: 1, y: 1 }, pivot: { x: 0, y: 0 }, parent: null, z: 0, visible: true, ...o })
-// 몸(원점에 놓인 200×400 이미지) → 오른팔(어깨 (60,80)) → 오른손(팔 이미지 안의 손목 (10,100))
+// 로컬 좌표 = 원본 이미지 좌표. 원래 자세는 position = pivot.
+// 몸(골반 (100,200)) → 오른팔(어깨 (60,80), 이미지 (50,80)부터 20×110) → 오른손(손목 (60,180), 이미지 (55,180)부터 10×20)
 const makeState = (): EditorState => ({
   duration: 3, keys: [],
   parts: {
-    body: part({ position: { x: 100, y: 200 }, pivot: { x: 100, y: 200 } }), // 이미지 좌표 그대로(단위행렬)
-    rightArm: part({ parent: 'body', position: { x: 60, y: 80 }, pivot: { x: 10, y: 0 }, z: 2 }), // 팔 이미지는 (50,80)부터, 어깨가 팔 이미지의 (10,0)
-    rightHand: part({ parent: 'rightArm', position: { x: 10, y: 100 }, pivot: { x: 5, y: 0 }, z: 3 }), // 손목 = 팔 이미지 (10,100)
+    body: part({ position: { x: 100, y: 200 }, pivot: { x: 100, y: 200 } }),
+    rightArm: part({ parent: 'body', position: { x: 60, y: 80 }, pivot: { x: 60, y: 80 }, z: 2 }),
+    rightHand: part({ parent: 'rightArm', position: { x: 60, y: 180 }, pivot: { x: 60, y: 180 }, z: 3 }),
   },
 })
 const char: Character = {
@@ -43,8 +44,8 @@ test('Pivot: 팔은 어깨(pivot)를 중심으로 회전한다 (가운데가 아
   const s = updatePart(makeState(), 'rightArm', { rotation: 90 })
   const W = worldMatrices(s)
   closeP(pivotWorld(s, 'rightArm', W), { x: 60, y: 80 }) // 어깨는 그대로
-  // 팔 아래 끝(팔 이미지 (10,100) = 원래 월드 (60,180))은 어깨를 중심으로 시계 방향 90° → (60-100, 80) = (-40, 80)
-  closeP(apply(W.rightArm, { x: 10, y: 100 }), { x: -40, y: 80 })
+  // 팔 아래 끝(원래 (60,180))은 어깨를 중심으로 시계 방향 90° → (60-100, 80) = (-40, 80)
+  closeP(apply(W.rightArm, { x: 60, y: 180 }), { x: -40, y: 80 })
 })
 
 test('부모/자식: 팔을 돌리면 손도 같이 돌고, 손목은 팔 끝에 붙어 있다', () => {
@@ -68,9 +69,9 @@ test('moveByWorld: 부모가 회전해 있어도 화면에서 민 만큼 정확�
 test('Pivot 옮기기: 그림은 제자리에 있고, 이후 회전은 새 pivot 중심이다', () => {
   const s0 = updatePart(makeState(), 'rightArm', { rotation: 30, scale: { x: 1.5, y: 0.8 } })
   const W0 = worldMatrices(s0)
-  const s1 = setPivotKeepPlace(s0, 'rightArm', { x: 10, y: 50 })
+  const s1 = setPivotKeepPlace(s0, 'rightArm', { x: 60, y: 130 })
   const W1 = worldMatrices(s1)
-  for (const q of [{ x: 0, y: 0 }, { x: 20, y: 110 }]) closeP(apply(W1.rightArm, q), apply(W0.rightArm, q), 1e-6)
+  for (const q of [{ x: 50, y: 80 }, { x: 70, y: 190 }]) closeP(apply(W1.rightArm, q), apply(W0.rightArm, q), 1e-6)
   closeP(pivotWorld(s1, 'rightHand', W1), pivotWorld(s0, 'rightHand', W0)) // 자식도 제자리
   const pv = pivotWorld(s1, 'rightArm', W1)
   closeP(pivotWorld(updatePart(s1, 'rightArm', { rotation: 80 }), 'rightArm'), pv) // 새 pivot은 회전해도 고정
@@ -82,12 +83,17 @@ test('부모 바꾸기: 월드 위치·회전은 유지되고, 자기 자식 밑
   const s1 = reparent(s0, 'rightHand', 'body')
   assert.equal(s1.parts.rightHand.parent, 'body')
   const W1 = worldMatrices(s1)
-  for (const q of [{ x: 0, y: 0 }, { x: 10, y: 20 }]) closeP(apply(W1.rightHand, q), apply(W0.rightHand, q), 1e-6)
+  for (const q of [{ x: 55, y: 180 }, { x: 65, y: 200 }]) closeP(apply(W1.rightHand, q), apply(W0.rightHand, q), 1e-6)
   // 이제 팔을 돌려도 손은 따라오지 않는다
   closeP(pivotWorld(updatePart(s1, 'rightArm', { rotation: 0 }), 'rightHand'), pivotWorld(s1, 'rightHand'))
   assert.equal(reparent(s0, 'body', 'rightHand'), s0, '순환 금지')
   assert.equal(reparent(s0, 'rightArm', 'rightArm'), s0)
   assert.ok(isDescendant(s0, 'rightHand', 'body'))
+})
+
+test('원래 자세에서는 모든 파츠가 단위행렬(원본 이미지 그대로)이다', () => {
+  const W = worldMatrices(makeState())
+  for (const id of ['body', 'rightArm', 'rightHand']) closeP(apply(W[id], { x: 17, y: 33 }), { x: 17, y: 33 })
 })
 
 test('클릭 판정: 위에 그려진 파츠가 먼저, 회전한 파츠도 정확히 잡힌다, 빈 곳은 통과', () => {
@@ -107,6 +113,8 @@ test('포즈 JSON: 저장하고 다시 불러오면 같은 포즈가 된다', ()
   const s = updatePart(updatePart(makeState(), 'rightArm', { rotation: 35, position: { x: 61, y: 79 } }), 'rightHand', { scale: { x: 1.2, y: 1.2 } })
   const file = JSON.parse(JSON.stringify(toPoseFile(char, s)))
   assert.equal(file.parts.rightArm.rotation, 35)
+  assert.equal(file.version, 2)
+  assert.throws(() => applyPoseFile(makeState(), { ...file, version: 1 }), /이전 형식/)
   const back = applyPoseFile(makeState(), file)
   assert.equal(back.applied, 3)
   for (const id of ['body', 'rightArm', 'rightHand']) closeP(pivotWorld(back.state, id), pivotWorld(s, id), 1e-3)

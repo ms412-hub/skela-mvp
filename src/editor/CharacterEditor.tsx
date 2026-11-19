@@ -3,7 +3,10 @@
 // 기존 관절(pts)과 이미지로 파츠를 구성하고, 이후에는 이미지가 아니라 파츠의 Transform만 바꾼다.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { buildCharacter } from '../character/buildCharacter'
+import { buildCharacter, renderDefs } from '../character/buildCharacter'
+import { decodeOwner, encodeOwner, moveOwner, nextSnapshot, paintLine, strokeDiff } from '../character/ownership'
+import type { OwnerSnapshot } from '../character/ownership'
+import type { Vec2 } from '../character/Transform'
 import type { LassoPart } from '../character/lasso'
 import type { EditorState, PartState } from '../character/CharacterModel'
 import { applyPoseFile, childrenOf, isDescendant, reparent, setPivotKeepPlace, toPoseFile, updatePart, worldMatrices, pivotWorld } from '../character/CharacterModel'
@@ -19,7 +22,9 @@ type Props = { img: CanvasImageSource; width: number; height: number; pts: Pt[];
 export default function CharacterEditor({ img, width, height, pts, lasso, onExit }: Props) {
   // 파츠 구성은 처음 한 번만 (이미지를 오리는 일은 여기서 끝)
   const built = useMemo(() => buildCharacter(img, width, height, pts, { lasso }), [img, width, height, pts, lasso])
-  const char = built.char
+  const an = built.an
+  const [defs, setDefs] = useState(built.char.defs)
+  const char = useMemo(() => ({ ...built.char, defs }), [built, defs])
   const [state, setState] = useState<EditorState>(built.state)
   const [preview, setPreview] = useState<EditorState | null>(null) // 타임라인 재생·탐색 중 보이는 포즈
   const [selection, setSelection] = useState<string[]>([])
@@ -36,7 +41,79 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
   // 되돌리기: 상태 객체의 참조만 쌓는다. 바뀐 파츠만 새 객체라 "변경 전후"만큼만 메모리를 쓴다.
   const hist = useRef(createHistory<EditorState>(built.state, { limit: 200 }))
   const [, bump] = useState(0)
-  useEffect(() => { hist.current.reset(built.state); setState(built.state); setPreview(null); setSelection([]) }, [built])
+  useEffect(() => { hist.current.reset(built.state); setState(built.state); setPreview(null); setSelection([]); setDefs(built.char.defs); applied.current = built.state.owner! }, [built])
+
+  /* ───── 파츠 경계 수정 (브러시) ───── */
+  // an.owner에 실제로 반영된 스냅샷. 되돌리기 등으로 state.owner가 바뀌면 그 사이의 바뀐 픽셀만 적용하고, 바뀐 파츠만 다시 만든다
+  const applied = useRef<OwnerSnapshot>(built.state.owner!)
+  const [brushR, setBrushR] = useState(12)
+  const [eraser, setEraser] = useState(false)
+  const overlay = useRef<HTMLCanvasElement | null>(null)
+  const [overlayTick, setOverlayTick] = useState(0)
+  const stroke = useRef<{ orig: Map<number, number>; last: Vec2; target: number } | null>(null)
+  const colorOf = (code: number) => `hsl(${(code * 47) % 360} 85% 55%)`
+  const rgbOf = (code: number): [number, number, number] => {
+    const h = ((code * 47) % 360) / 60, c = 0.85 * (1 - Math.abs(2 * 0.55 - 1)), x = c * (1 - Math.abs((h % 2) - 1)), m = 0.55 - c / 2
+    const [r, g, b] = h < 1 ? [c, x, 0] : h < 2 ? [x, c, 0] : h < 3 ? [0, c, x] : h < 4 ? [0, x, c] : h < 5 ? [x, 0, c] : [c, 0, x]
+    return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)]
+  }
+  const targetCode = () => (eraser ? 0 : primary ? an.codes.indexOf(primary) : -1)
+  const redrawOverlay = () => {
+    const c = overlay.current ?? (overlay.current = document.createElement('canvas'))
+    c.width = an.W
+    c.height = an.H
+    const img = new ImageData(an.W, an.H)
+    const tc = targetCode()
+    const pal = an.codes.map((_, i) => rgbOf(i))
+    for (let i = 0; i < an.W * an.H; i++) {
+      const o = an.owner[i]
+      if (o === 0 || (an.fg && !an.fg[i])) continue
+      const [r, g, b] = pal[o]
+      img.data[i * 4] = r; img.data[i * 4 + 1] = g; img.data[i * 4 + 2] = b; img.data[i * 4 + 3] = o === tc ? 150 : 80
+    }
+    c.getContext('2d')!.putImageData(img, 0, 0)
+    setOverlayTick((n) => n + 1)
+  }
+  useEffect(() => {
+    const target = state.owner
+    if (!target || target === applied.current) return
+    const touched = moveOwner(an.owner, applied.current, target)
+    applied.current = target
+    setDefs((d) => ({ ...d, ...renderDefs(an, [...touched, 0]) }))
+    if (tool === 'paint') redrawOverlay()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.owner])
+  const onStroke = (phase: 'start' | 'move' | 'end', p: Vec2) => {
+    if (phase === 'start') {
+      const tc = targetCode()
+      if (tc < 0) { setMsg('먼저 Hierarchy에서 픽셀을 가져갈 파츠를 고르세요 (지우개는 몸통으로 돌려요).'); return }
+      if (state !== hist.current.present()) commit(state)
+      stroke.current = { orig: new Map(), last: p, target: tc }
+      paintLine(an.owner, an.fg, an.W, an.H, p.x, p.y, p.x, p.y, brushR, tc, stroke.current.orig)
+      redrawOverlay()
+      return
+    }
+    const st = stroke.current
+    if (!st) return
+    paintLine(an.owner, an.fg, an.W, an.H, st.last.x, st.last.y, p.x, p.y, brushR, st.target, st.orig)
+    st.last = p
+    if (phase === 'move') { redrawOverlay(); return }
+    stroke.current = null
+    const diff = strokeDiff(an.owner, st.orig)
+    if (!diff) { redrawOverlay(); return }
+    const snap = nextSnapshot(applied.current, diff)
+    applied.current = snap
+    const touched = new Set<number>([...diff.from, ...diff.to, 0])
+    setDefs((d) => ({ ...d, ...renderDefs(an, touched) }))
+    commit({ ...state, owner: snap }, `경계를 고쳤어요: 픽셀 ${diff.idx.length}개 → ${an.names[st.target]}`)
+    redrawOverlay()
+  }
+  // 경계 수정 중에는 원래 자세로 보여 준다 (로컬 좌표 = 원본 이미지 좌표라 position = pivot, 회전 0, 크기 1이면 원래 자세)
+  const restState = useMemo<EditorState>(() => {
+    const parts: EditorState['parts'] = {}
+    for (const [id, p] of Object.entries(state.parts)) parts[id] = { ...p, position: { ...p.pivot }, rotation: 0, scale: { x: 1, y: 1 } }
+    return { ...state, parts }
+  }, [state])
 
   const shown = preview ?? state
   const live = (s: EditorState) => setState(s)
@@ -120,6 +197,7 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
       else if (k === 'e') setTool('rotate')
       else if (k === 'r') setTool('scale')
       else if (k === 'p') setTool('pivot')
+      else if (k === 'b') setTool('paint')
       else if (k === 'f') sceneApi.current?.frameSelection()
       else if (e.key === 'Home') sceneApi.current?.frameAll()
     }
@@ -129,6 +207,8 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
 
   const primary = selection[selection.length - 1]
   const sel: PartState | undefined = primary ? shown.parts[primary] : undefined
+  // 경계 도구를 켜거나 대상 파츠·지우개를 바꾸면 파츠별 색 표시를 다시 그린다
+  useEffect(() => { if (tool === 'paint') redrawOverlay() }, [tool, primary, eraser]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Inspector 값 변경: 입력하는 동안 바로 반영(live), 칸을 떠나거나 Enter면 되돌리기 한 단계(commit)
   const editPart = (patch: Partial<PartState>) => {
@@ -139,7 +219,15 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
   const commitNow = () => { if (state !== hist.current.present()) commit(state) }
 
   // 저장/불러오기
-  const poseJson = useMemo(() => JSON.stringify(toPoseFile(char, state), null, 2), [char, state])
+  const poseJson = useMemo(() => {
+    const f = toPoseFile(char, state)
+    // 경계를 고친 경우만 픽셀 주인을 함께 저장 (같은 그림·같은 크기일 때 다시 적용됨)
+    if (state.owner && state.owner.depth > 0 && state.owner === applied.current) f.ownership = { ids: an.codes, w: an.W, h: an.H, rle: encodeOwner(an.owner) }
+    // 경계 데이터(숫자가 많음)는 한 줄로 써서 파일이 커지지 않게 한다
+    const { ownership, ...rest } = f
+    const head = JSON.stringify(rest, null, 2)
+    return ownership ? head.slice(0, -2) + ',\n  "ownership": ' + JSON.stringify(ownership) + '\n}' : head
+  }, [char, state, an])
   const downloadJson = () => {
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([poseJson], { type: 'application/json' }))
@@ -152,8 +240,26 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
   }
   const applyLoad = (text: string) => {
     try {
-      const r = applyPoseFile(state, JSON.parse(text))
-      commit(r.state, `포즈를 불러왔어요 (파츠 ${r.applied}개${r.skipped.length ? `, 없는 파츠 ${r.skipped.length}개는 건너뜀` : ''}).`)
+      const json = JSON.parse(text)
+      const r = applyPoseFile(state, json)
+      let next = r.state
+      let ownNote = ''
+      // 경계 수정 내용: 같은 크기면 파츠 id로 맞춰 적용 (모르는 파츠의 픽셀은 몸통으로). 되돌리기 한 단계로 들어간다
+      const own = json.ownership
+      if (own && own.w === an.W && own.h === an.H && Array.isArray(own.ids) && Array.isArray(own.rle)) {
+        const dec = decodeOwner(own.rle, an.W * an.H)
+        if (dec) {
+          const map = (own.ids as string[]).map((id) => Math.max(0, an.codes.indexOf(id)))
+          const idx: number[] = [], from: number[] = [], to: number[] = []
+          for (let i = 0; i < dec.length; i++) { const v = map[dec[i]] ?? 0; if (v !== an.owner[i]) { idx.push(i); from.push(an.owner[i]); to.push(v) } }
+          if (idx.length) {
+            const snap = nextSnapshot(applied.current, { idx: Uint32Array.from(idx), from: Uint8Array.from(from), to: Uint8Array.from(to) })
+            next = { ...next, owner: snap }
+            ownNote = `, 경계 수정 픽셀 ${idx.length}개`
+          }
+        } else ownNote = ', 경계 수정 내용은 손상돼 건너뜀'
+      } else if (own) ownNote = ', 그림 크기가 달라 경계 수정 내용은 건너뜀'
+      commit(next, `포즈를 불러왔어요 (파츠 ${r.applied}개${r.skipped.length ? `, 없는 파츠 ${r.skipped.length}개는 건너뜀` : ''}${ownNote}).`)
       setPreview(null)
       setDialog(null)
     } catch (e) {
@@ -182,6 +288,7 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
         {toolBtn('rotate', '회전', 'E')}
         {toolBtn('scale', '크기', 'R')}
         {toolBtn('pivot', '피벗', 'P')}
+        {toolBtn('paint', '경계 수정', 'B')}
         <span className="ce-sep" />
         <button className="ce-btn" onClick={() => sceneApi.current?.frameAll()} title="전체 보기 (Home)">전체 보기</button>
         <button className="ce-btn" onClick={() => sceneApi.current?.frameSelection()} disabled={!selection.length} title="선택으로 이동 (F)">선택으로 이동</button>
@@ -203,8 +310,8 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
       <div className="ce-scene">
         <SceneView
           char={char}
-          state={shown}
-          selection={selection}
+          state={tool === 'paint' ? restState : shown}
+          selection={tool === 'paint' ? [] : selection}
           tool={tool}
           showJoints={showJoints}
           onSelect={setSelection}
@@ -212,6 +319,9 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
           onLive={live}
           onCommit={(s) => commit(s)}
           apiRef={sceneApi}
+          paint={{ overlay: overlay.current, radius: brushR, onStroke }}
+          key={'scene'}
+          overlayTick={overlayTick}
         />
         <div className="ce-scene-help">휠: 확대/축소 · 빈 곳 드래그(또는 가운데/오른쪽 버튼): 화면 이동 · W/E/R/P: 이동/회전/크기/피벗 · Ctrl+회전: 15° 단위</div>
       </div>
@@ -219,7 +329,23 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
       {/* Inspector */}
       <div className="ce-panel ce-insp">
         <div className="ce-title">Inspector</div>
-        {!sel || !primary ? (
+        {tool === 'paint' ? (
+          <div className="ce-fields">
+            <div className="ce-name">경계 수정 (브러시)</div>
+            <div className="ce-glabel">원래 자세에서 칠한 픽셀이 아래 파츠로 옮겨 가요. 색은 파츠별 영역이에요.</div>
+            <Group label="가져갈 파츠">
+              <div className="ce-target">
+                <i style={{ background: eraser ? 'transparent' : primary ? colorOf(an.codes.indexOf(primary)) : 'transparent' }} />
+                {eraser ? 'Body (지우개: 몸통으로 돌리기)' : primary ? char.defs[primary]?.name ?? primary : 'Hierarchy에서 파츠를 고르세요'}
+              </div>
+            </Group>
+            <label className="ce-check"><input type="checkbox" checked={eraser} onChange={(e) => setEraser(e.target.checked)} /> 지우개 (칠한 픽셀을 몸통으로 돌리기)</label>
+            <Group label={`브러시 크기 (${brushR}px)`}>
+              <input type="range" min={2} max={80} value={brushR} onChange={(e) => setBrushR(Number(e.target.value))} style={{ width: '100%' }} aria-label="브러시 크기" />
+            </Group>
+            <div className="ce-glabel">칠한 뒤 Ctrl+Z로 되돌릴 수 있어요. 다른 도구(W/E/R/P)를 누르면 편집하던 포즈로 돌아가요.</div>
+          </div>
+        ) : !sel || !primary ? (
           <div className="ce-empty">선택한 파츠가 없어요.</div>
         ) : (
           <div className="ce-fields" key={primary}>
@@ -325,6 +451,7 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
           onDoubleClick={() => { setSelection([id]); setTimeout(() => sceneApi.current?.frameSelection()) }}
         >
           <span className="ce-caret">{childrenOf(shown, id).length ? '▾' : '·'}</span>
+          {tool === 'paint' && an.codes.indexOf(id) > 0 && <i className="ce-swatch" style={{ background: colorOf(an.codes.indexOf(id)) }} />}
           {char.defs[id]?.name ?? id}
           {!shown.parts[id].visible && <span className="ce-hidden"> (숨김)</span>}
         </div>

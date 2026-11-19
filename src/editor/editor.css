@@ -65,3 +65,5 @@
   .ce-root { grid-template-columns: 160px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) 220px 132px; grid-template-areas: 'menu menu' 'hier scene' 'insp insp' 'time time'; }
   .ce-insp { border-left: 0; border-top: 1px solid var(--ce-line); }
 }
+.ce-target { display: flex; align-items: center; gap: 6px; }
+.ce-target i, .ce-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1px solid #111; margin-right: 4px; vertical-align: -1px; }
