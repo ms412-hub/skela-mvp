@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
 import RigView from './RigView'
 import CharacterEditor from './editor/CharacterEditor'
+import type { AssetItem } from './Assets'
 import { normalizeTips } from './meshSkin'
 import { CUSTOM_MIN, mergeDetected, moveJoint, resetToAuto, countManual } from './jointMerge'
 import type { JointPt } from './jointMerge'
@@ -60,6 +61,12 @@ export default function App() {
   const [pts, setPts] = useState<Pt[] | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
   const [mode, setMode] = useState<'edit' | 'rig' | 'editor'>('edit')
+  // 리그 화면에서 만든 파츠(올가미·소품). 화면을 바꿔도 남고, 올가미 파츠는 캐릭터 에디터로 넘어간다
+  const [rigAssets, setRigAssets] = useState<AssetItem[]>([])
+  const lasso = useMemo(
+    () => rigAssets.filter((a) => a.poly).map((a) => ({ name: a.name, poly: a.poly!, anchor: a.anchor, front: a.front })),
+    [rigAssets],
+  )
   const [links, setLinks] = useState<[number, number][]>([]) // 사용자가 만든 추가 연결
   const [tool, setTool] = useState<Tool>('move')
 
@@ -130,6 +137,7 @@ export default function App() {
       drawBase()
       setHasImage(true)
       setPts(null)
+      setRigAssets([]) // 다른 그림의 파츠는 버린다
       setSelected(null)
       setLinks([])
       setTool('move')
@@ -354,6 +362,8 @@ export default function App() {
             links={links}
             onPtsLoad={setPts}
             onLinksLoad={setLinks}
+            initialAssets={rigAssets}
+            onAssetsChange={setRigAssets}
           />
         )}
 
@@ -363,6 +373,7 @@ export default function App() {
             width={canvasRef.current.width}
             height={canvasRef.current.height}
             pts={pts}
+            lasso={lasso}
             onExit={() => setMode('edit')}
           />
         )}

@@ -27,6 +27,9 @@ type Props = {
   links: [number, number][]
   onPtsLoad: (pts: Pt[]) => void
   onLinksLoad: (links: [number, number][]) => void
+  // 선택: 파츠 목록을 바깥(App)에 보관해 화면을 바꿔도 남게 하고, 캐릭터 에디터로 넘긴다
+  initialAssets?: AssetItem[]
+  onAssetsChange?: (assets: AssetItem[]) => void
 }
 
 type Chain = {
@@ -906,11 +909,12 @@ function PartSelectOverlay({
 
 /* ───────────── 메인 화면 ───────────── */
 
-export default function RigView({ img, width, height, pts, links, onPtsLoad, onLinksLoad }: Props) {
+export default function RigView({ img, width, height, pts, links, onPtsLoad, onLinksLoad, initialAssets, onAssetsChange }: Props) {
   const [armHW, setArmHW] = useState(30)
   const [legHW, setLegHW] = useState(40)
   const [angles, setAngles] = useState<Record<string, number>>({})
-  const [assets, setAssets] = useState<AssetItem[]>([])
+  const [assets, setAssets] = useState<AssetItem[]>(() => initialAssets ?? [])
+  useEffect(() => { onAssetsChange?.(assets) }, [assets, onAssetsChange])
   const [selAsset, setSelAsset] = useState<number | null>(null)
 
   // 되돌리기/다시 실행: 자세(angles)와 파츠(assets)의 "참조"만 쌓는다 (이미지 복사 없음). 드래그가 멈춘 뒤 한 단계로 기록한다.

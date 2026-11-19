@@ -16,6 +16,8 @@ import { foregroundMask, withTips } from '../meshSkin.ts'
 import { fillMasked } from '../holeFill.ts'
 import type { Character, EditorState, PartDef, PartState } from './CharacterModel.ts'
 import type { Vec2 } from './Transform.ts'
+import { lassoPlan } from './lasso.ts'
+import type { LassoPart } from './lasso.ts'
 
 type Pt = { id: number; name: string; x: number; y: number }
 type Seg = { id: string; name: string; parent: string; a: number; b: number; kind: 'arm' | 'hand' | 'leg' | 'foot'; z: number; disk: boolean }
@@ -43,7 +45,12 @@ const distSeg = (px: number, py: number, a: Vec2, b: Vec2) => {
   return Math.hypot(px - a.x - t * dx, py - a.y - t * dy)
 }
 
-export function buildCharacter(img: CanvasImageSource, W: number, H: number, ptsIn: Pt[], name = 'Character'): { char: Character; state: EditorState } {
+export function buildCharacter(
+  img: CanvasImageSource, W: number, H: number, ptsIn: Pt[],
+  opts: { name?: string; lasso?: LassoPart[] } = {},
+): { char: Character; state: EditorState } {
+  const name = opts.name ?? 'Character'
+  const lasso = opts.lasso ?? []
   const src = document.createElement('canvas')
   src.width = W
   src.height = H
@@ -75,7 +82,28 @@ export function buildCharacter(img: CanvasImageSource, W: number, H: number, pts
   const hipMid = P(23) && P(24) ? { x: (P(23)!.x + P(24)!.x) / 2, y: (P(23)!.y + P(24)!.y) / 2 } : null
   const torsoR = shW * 0.35
 
-  // 픽셀마다 주인 파츠 번호 (0 = body, 1 = head, 2.. = segs)
+  // 올가미 영역: 리그에서 지울 때와 같은 두께(채우기 + 4px 테두리)로 픽셀화
+  const lassoMasks = lasso.map((l) => {
+    const c = document.createElement('canvas')
+    c.width = W
+    c.height = H
+    const x = c.getContext('2d', { willReadFrequently: true })!
+    x.fillStyle = '#000'
+    x.strokeStyle = '#000'
+    x.lineWidth = 4
+    x.beginPath()
+    l.poly.forEach((q, i) => (i ? x.lineTo(q.x, q.y) : x.moveTo(q.x, q.y)))
+    x.closePath()
+    x.fill()
+    x.stroke()
+    const a = x.getImageData(0, 0, W, H).data
+    const m = new Uint8Array(W * H)
+    for (let i = 0; i < m.length; i++) m[i] = a[i * 4 + 3] > 0 ? 1 : 0
+    return m
+  })
+  const lassoBase = 2 + segs.length
+
+  // 픽셀마다 주인 파츠 번호 (0 = body, 1 = head, 2.. = segs, lassoBase.. = 올가미 파츠)
   const owner = new Uint8Array(W * H)
   // 몸통 영역 안쪽인지 (파츠가 떠난 자리 중 여기만 몸 색으로 채우고, 바깥은 배경(투명)으로 둔다)
   const inTorso = new Uint8Array(W * H)
@@ -85,6 +113,10 @@ export function buildCharacter(img: CanvasImageSource, W: number, H: number, pts
       const i = y * W + x
       if (shMid && hipMid && distSeg(x, y, shMid, hipMid) <= torsoKeep) inTorso[i] = 1
       if (fg && !fg[i]) continue
+      // 올가미 파츠가 가장 우선 (먼저 만든 파츠가 이김: 리그에서도 앞 파츠를 지운 그림에서 다음 파츠를 오린다)
+      let lo = -1
+      for (let j = 0; j < lassoMasks.length; j++) if (lassoMasks[j][i]) { lo = j; break }
+      if (lo >= 0) { owner[i] = lassoBase + lo; continue }
       // 가장 가까운 팔다리 뼈. 반폭 안쪽이면 무조건 그 팔다리, 반폭의 2.2배까지는 몸통 중심선보다 가까울 때만
       // (부푼 소매·넓은 바지처럼 뼈에서 먼 옷자락도 팔다리와 함께 움직이게)
       let best = -1, bd = Infinity
@@ -161,6 +193,16 @@ export function buildCharacter(img: CanvasImageSource, W: number, H: number, pts
     const pOrigin = parts[s.parent] ? po : { x: 0, y: 0 }
     parts[s.id] = base({ parent, position: { x: s.A.x - pOrigin.x, y: s.A.y - pOrigin.y }, pivot: { x: s.A.x - origins[s.id].x, y: s.A.y - origins[s.id].y }, z: s.z })
   }
-  const order = PART_ORDER.filter((id) => parts[id])
+  // 올가미 파츠: 오려낸 원래 자리에서 시작. pivot은 파츠 가운데(피벗 도구로 옮길 수 있음)
+  const plans = lassoPlan(lasso, new Set(Object.keys(parts)))
+  for (const pl of plans) {
+    makeImage(pl.id, pl.name, (i) => owner[i] === lassoBase + pl.index)
+    const d = defs[pl.id]
+    const pivot = { x: d.w / 2, y: d.h / 2 }
+    const world = { x: origins[pl.id].x + pivot.x, y: origins[pl.id].y + pivot.y }
+    const po = pl.parent ? origins[pl.parent] ?? { x: 0, y: 0 } : { x: 0, y: 0 }
+    parts[pl.id] = base({ parent: pl.parent, position: { x: world.x - po.x, y: world.y - po.y }, pivot, z: pl.z })
+  }
+  const order = [...PART_ORDER.filter((id) => parts[id]), ...plans.map((p) => p.id)]
   return { char: { name, w: W, h: H, defs, order }, state: { parts, keys: [], duration: 3 } }
 }

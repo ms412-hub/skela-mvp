@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { buildCharacter } from '../character/buildCharacter'
+import type { LassoPart } from '../character/lasso'
 import type { EditorState, PartState } from '../character/CharacterModel'
 import { applyPoseFile, childrenOf, isDescendant, reparent, setPivotKeepPlace, toPoseFile, updatePart, worldMatrices, pivotWorld } from '../character/CharacterModel'
 import { applyPose, capturePose, keyAt, removeKey, sampleAt, setKey } from '../animation/Timeline'
@@ -13,11 +14,11 @@ import type { SceneApi, Tool } from './SceneView'
 import './editor.css'
 
 type Pt = { id: number; name: string; x: number; y: number }
-type Props = { img: CanvasImageSource; width: number; height: number; pts: Pt[]; onExit: () => void }
+type Props = { img: CanvasImageSource; width: number; height: number; pts: Pt[]; lasso?: LassoPart[]; onExit: () => void }
 
-export default function CharacterEditor({ img, width, height, pts, onExit }: Props) {
+export default function CharacterEditor({ img, width, height, pts, lasso, onExit }: Props) {
   // 파츠 구성은 처음 한 번만 (이미지를 오리는 일은 여기서 끝)
-  const built = useMemo(() => buildCharacter(img, width, height, pts), [img, width, height, pts])
+  const built = useMemo(() => buildCharacter(img, width, height, pts, { lasso }), [img, width, height, pts, lasso])
   const char = built.char
   const [state, setState] = useState<EditorState>(built.state)
   const [preview, setPreview] = useState<EditorState | null>(null) // 타임라인 재생·탐색 중 보이는 포즈
