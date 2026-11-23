@@ -61,9 +61,33 @@
 .ce-modal-box { background: var(--ce-panel); border: 1px solid var(--ce-line); border-radius: 6px; width: min(640px, 100%); padding: 10px; display: grid; gap: 8px; }
 .ce-modal-box textarea { width: 100%; height: 300px; background: #14151a; color: var(--ce-fg); border: 1px solid #383c49; border-radius: 4px; font: 12px ui-monospace, monospace; padding: 8px; }
 .ce-row-btns { display: flex; gap: 6px; justify-content: flex-end; }
+.ce-mobile-btn { display: none; }
+.ce-png-opts { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.ce-png-opts select { background: #14151a; color: var(--ce-fg); border: 1px solid #383c49; border-radius: 4px; padding: 3px 6px; font: inherit; margin-left: 6px; }
+.ce-png-preview { display: grid; place-items: center; max-height: 50vh; overflow: auto; border: 1px solid var(--ce-line); border-radius: 4px; padding: 8px; background-image: linear-gradient(45deg, #2a2c35 25%, transparent 25%), linear-gradient(-45deg, #2a2c35 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2c35 75%), linear-gradient(-45deg, transparent 75%, #2a2c35 75%); background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
+.ce-png-preview img { max-width: 100%; max-height: 46vh; }
+/* 에디터가 열려 있으면 앱의 아래쪽 바는 숨긴다 (에디터에 "점 편집으로" 버튼이 따로 있음) */
+.app:has(.ce-root) .bottombar { display: none; }
+.ce-toast { display: none; }
+/* 좁은 화면(휴대폰): Scene을 크게 쓰고, 목록과 속성은 메뉴의 버튼으로 아래에서 올라오는 패널로 연다 */
 @media (max-width: 900px) {
-  .ce-root { grid-template-columns: 160px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) 220px 132px; grid-template-areas: 'menu menu' 'hier scene' 'insp insp' 'time time'; }
-  .ce-insp { border-left: 0; border-top: 1px solid var(--ce-line); }
+  .app:has(.ce-root) .topbar { display: none; }
+  .ce-menu { flex-wrap: nowrap; overflow-x: auto; padding: 4px 8px; gap: 4px; scrollbar-width: thin; }
+  .ce-menu > * { flex: 0 0 auto; }
+  .ce-menu .ce-msg { display: none; }
+  .ce-sep { display: none; }
+  .ce-toast { display: block; position: absolute; left: 8px; right: 8px; top: 6px; z-index: 5; pointer-events: none; font-size: 12px; color: #e6e7ee; background: rgba(20, 21, 26, .78); padding: 4px 8px; border-radius: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ce-root { position: relative; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) 118px; grid-template-areas: 'menu' 'scene' 'time'; }
+  .ce-mobile-btn { display: inline-block; }
+  .ce-msg { margin-left: 0; max-width: none; flex-basis: 100%; }
+  .ce-btn { padding: 7px 11px; white-space: nowrap; } /* 손가락으로 누르기 쉽게 */
+  .ce-scene-help { display: none; }
+  .ce-hier, .ce-insp { display: none; position: absolute; left: 0; right: 0; bottom: 118px; height: 46%; z-index: 20; border: 0; border-top: 2px solid var(--ce-accent); box-shadow: 0 -8px 24px rgba(0, 0, 0, .45); }
+  .ce-hier.open, .ce-insp.open { display: flex; flex-direction: column; }
+  .ce-insp.open { display: block; }
+  .ce-row { padding: 8px 10px; }
+  .ce-time-bar { padding: 2px 8px; }
+  .ce-ruler { margin: 4px 16px 6px; min-height: 34px; }
 }
 .ce-target { display: flex; align-items: center; gap: 6px; }
 .ce-target i, .ce-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1px solid #111; margin-right: 4px; vertical-align: -1px; }

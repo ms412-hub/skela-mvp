@@ -9,7 +9,8 @@ import type { OwnerSnapshot } from '../character/ownership'
 import type { Vec2 } from '../character/Transform'
 import type { LassoPart } from '../character/lasso'
 import type { EditorState, PartState } from '../character/CharacterModel'
-import { applyPoseFile, childrenOf, isDescendant, reparent, setPivotKeepPlace, toPoseFile, updatePart, worldMatrices, pivotWorld } from '../character/CharacterModel'
+import { applyPoseFile, childrenOf, isDescendant, reparent, resetPose, setPivotKeepPlace, toPoseFile, updatePart, worldMatrices, pivotWorld } from '../character/CharacterModel'
+import { renderPose } from './exportPng'
 import { applyPose, capturePose, keyAt, removeKey, sampleAt, setKey } from '../animation/Timeline'
 import { createHistory } from '../undoManager'
 import SceneView from './SceneView'
@@ -34,7 +35,11 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
   const [playing, setPlaying] = useState(false)
   const [loop, setLoop] = useState(true)
   const [msg, setMsg] = useState('파츠를 클릭하거나 왼쪽 Hierarchy에서 선택하세요.')
-  const [dialog, setDialog] = useState<null | 'save' | 'load'>(null)
+  const [dialog, setDialog] = useState<null | 'save' | 'load' | 'png'>(null)
+  const [sheet, setSheet] = useState<null | 'hier' | 'insp'>(null) // 좁은 화면: 목록/속성을 아래에서 올라오는 패널로
+  const [pngTransparent, setPngTransparent] = useState(true)
+  const [pngScale, setPngScale] = useState(1)
+  const [pngUrl, setPngUrl] = useState<string | null>(null)
   const [loadText, setLoadText] = useState('')
   const sceneApi = useRef<SceneApi | null>(null)
 
@@ -132,6 +137,29 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
     if (state !== hist.current.present()) hist.current.commit(state)
     const s = hist.current.undo()
     if (s) { setState(s); setPreview(null); setMsg('되돌렸어요.'); bump((n) => n + 1) }
+  }
+  // 원래 자세로: 모든 파츠의 위치·회전·크기를 처음으로 (되돌리기로 취소 가능)
+  const doResetPose = () => {
+    const base = beginEdit()
+    const next = resetPose(base)
+    if (next === base) { setMsg('이미 원래 자세예요.'); return }
+    commit(next, '원래 자세로 돌렸어요. (되돌리기로 취소할 수 있어요)')
+  }
+  const openPng = () => {
+    setDialog('png')
+  }
+  // 미리보기는 대화상자가 열려 있고 옵션·포즈가 바뀔 때마다 다시 그린다
+  useEffect(() => {
+    if (dialog !== 'png') { setPngUrl(null); return }
+    try { setPngUrl(renderPose(char, shown, { transparent: pngTransparent, scale: pngScale }).toDataURL('image/png')) } catch { setPngUrl(null) }
+  }, [dialog, char, shown, pngTransparent, pngScale])
+  const downloadPng = () => {
+    if (!pngUrl) return
+    const a = document.createElement('a')
+    a.href = pngUrl
+    a.download = 'skela-pose.png'
+    a.click()
+    setMsg('PNG를 저장했어요. (저장이 막힌 화면이면 미리보기를 길게 눌러/우클릭해서 이미지로 저장하세요)')
   }
   const redo = () => {
     const s = hist.current.redo()
@@ -278,9 +306,13 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
       <div className="ce-menu">
         <button className="ce-btn" onClick={onExit}>← 점 편집으로</button>
         <span className="ce-sep" />
+        <button className="ce-btn ce-mobile-btn" onClick={() => setSheet(sheet === 'hier' ? null : 'hier')}>목록</button>
+        <button className="ce-btn ce-mobile-btn" onClick={() => setSheet(sheet === 'insp' ? null : 'insp')}>속성</button>
         <button className="ce-btn" onClick={() => setDialog('save')}>저장</button>
         <button className="ce-btn" onClick={() => { setLoadText(''); setDialog('load') }}>불러오기</button>
+        <button className="ce-btn" onClick={openPng} title="현재 포즈를 PNG 이미지로">PNG 내보내기</button>
         <button className={playing ? 'ce-btn on' : 'ce-btn'} onClick={play}>{playing ? '⏸ 정지' : '▶ 실행'}</button>
+        <button className="ce-btn" onClick={doResetPose} title="모든 파츠를 원래 자세로">원래 자세로</button>
         <button className="ce-btn" onClick={undo} disabled={!hist.current.canUndo() && state === hist.current.present()} title="되돌리기 (Ctrl+Z)">↶ 되돌리기</button>
         <button className="ce-btn" onClick={redo} disabled={!hist.current.canRedo()} title="다시 실행 (Ctrl+Y)">↷ 다시 실행</button>
         <span className="ce-sep" />
@@ -297,7 +329,7 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
       </div>
 
       {/* Hierarchy */}
-      <div className="ce-panel ce-hier">
+      <div className={'ce-panel ce-hier' + (sheet === 'hier' ? ' open' : '')}>
         <div className="ce-title">Hierarchy</div>
         <div className="ce-tree" role="tree">
           <div className="ce-row ce-rootrow">{char.name}</div>
@@ -323,11 +355,12 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
           key={'scene'}
           overlayTick={overlayTick}
         />
+        <div className="ce-toast" role="status">{msg}</div>
         <div className="ce-scene-help">휠: 확대/축소 · 빈 곳 드래그(또는 가운데/오른쪽 버튼): 화면 이동 · W/E/R/P: 이동/회전/크기/피벗 · Ctrl+회전: 15° 단위</div>
       </div>
 
       {/* Inspector */}
-      <div className="ce-panel ce-insp">
+      <div className={'ce-panel ce-insp' + (sheet === 'insp' ? ' open' : '')}>
         <div className="ce-title">Inspector</div>
         {tool === 'paint' ? (
           <div className="ce-fields">
@@ -407,10 +440,28 @@ export default function CharacterEditor({ img, width, height, pts, lasso, onExit
       </div>
 
       {dialog && (
-        <div className="ce-modal" role="dialog" aria-label={dialog === 'save' ? '포즈 저장' : '포즈 불러오기'}>
+        <div className="ce-modal" role="dialog" aria-label={dialog === 'save' ? '포즈 저장' : dialog === 'png' ? 'PNG 내보내기' : '포즈 불러오기'}>
           <div className="ce-modal-box">
-            <div className="ce-title">{dialog === 'save' ? '포즈 저장 (JSON)' : '포즈 불러오기'}</div>
-            {dialog === 'save' ? (
+            <div className="ce-title">{dialog === 'save' ? '포즈 저장 (JSON)' : dialog === 'png' ? 'PNG 내보내기' : '포즈 불러오기'}</div>
+            {dialog === 'png' ? (
+              <>
+                <div className="ce-png-opts">
+                  <label className="ce-check"><input type="checkbox" checked={pngTransparent} onChange={(e) => setPngTransparent(e.target.checked)} /> 투명 배경</label>
+                  <label className="ce-check">크기
+                    <select value={pngScale} onChange={(e) => setPngScale(Number(e.target.value))}>
+                      <option value={0.5}>0.5배</option>
+                      <option value={1}>1배 ({char.w}×{char.h})</option>
+                      <option value={2}>2배</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="ce-png-preview">{pngUrl ? <img src={pngUrl} alt="내보낼 이미지 미리보기" data-testid="png-preview" /> : '미리보기를 만들 수 없어요'}</div>
+                <div className="ce-row-btns">
+                  <button className="ce-btn on" onClick={downloadPng} disabled={!pngUrl}>PNG 저장</button>
+                  <button className="ce-btn" onClick={() => setDialog(null)}>닫기</button>
+                </div>
+              </>
+            ) : dialog === 'save' ? (
               <>
                 <textarea readOnly value={poseJson} onFocus={(e) => e.currentTarget.select()} />
                 <div className="ce-row-btns">

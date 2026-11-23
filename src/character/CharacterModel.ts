@@ -106,6 +106,19 @@ export function reparent(state: EditorState, id: string, newParent: string | nul
   return updatePart(state, id, { parent: newParent, position: d.position, rotation: d.rotation, scale: d.scale })
 }
 
+// 모든 파츠를 원래 자세로 (위치 = 피벗, 회전 0, 크기 1). 피벗·부모·그리는 순서·보이기는 그대로 둔다.
+// 바뀐 것이 없으면 같은 상태 객체를 돌려줘서 되돌리기 이력에 빈 단계가 생기지 않는다.
+export function resetPose(state: EditorState): EditorState {
+  let changed = false
+  const parts: EditorState['parts'] = {}
+  for (const [id, p] of Object.entries(state.parts)) {
+    const rest = p.position.x === p.pivot.x && p.position.y === p.pivot.y && p.rotation === 0 && p.scale.x === 1 && p.scale.y === 1
+    if (rest) parts[id] = p
+    else { changed = true; parts[id] = { ...p, position: { ...p.pivot }, rotation: 0, scale: { x: 1, y: 1 } } }
+  }
+  return changed ? { ...state, parts } : state
+}
+
 // 그리는 순서: z가 작은 것부터, 같으면 Hierarchy 순서
 export function drawOrder(char: Character, state: EditorState): string[] {
   const idx = new Map(char.order.map((id, i) => [id, i]))

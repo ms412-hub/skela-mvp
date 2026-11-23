@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { apply, decompose, invert, localMatrix, multiply, rotation, translate, scaling } from '../src/character/Transform.ts'
 import {
   worldMatrices, pivotWorld, moveByWorld, setPivotKeepPlace, reparent, hitTest, drawOrder, updatePart,
-  toPoseFile, applyPoseFile, isDescendant,
+  toPoseFile, applyPoseFile, isDescendant, resetPose,
 } from '../src/character/CharacterModel.ts'
 import type { Character, EditorState, PartState } from '../src/character/CharacterModel.ts'
 import { createHistory } from '../src/undoManager.ts'
@@ -138,4 +138,18 @@ test('되돌리기: 팔 회전 → 다리(몸) 이동 → 머리(손) 이동 →
   assert.equal(h.undo(), s1)
   assert.equal(h.redo(), s2)
   assert.equal(h.present().parts.rightArm.rotation, 20)
+})
+
+test('원래 자세로: 위치·회전·크기만 초기화하고 피벗·부모·z는 그대로, 바뀐 것이 없으면 같은 객체', () => {
+  const s0 = makeState()
+  assert.equal(resetPose(s0), s0, '이미 원래 자세면 같은 객체 (되돌리기에 빈 단계가 생기지 않음)')
+  const moved = updatePart(updatePart(s0, 'rightArm', { rotation: 70, scale: { x: 2, y: 1 } }), 'body', { position: { x: 120, y: 190 }, pivot: { x: 100, y: 200 } })
+  const r = resetPose(moved)
+  assert.equal(r.parts.rightArm.rotation, 0)
+  assert.deepEqual(r.parts.rightArm.scale, { x: 1, y: 1 })
+  assert.deepEqual(r.parts.body.position, { x: 100, y: 200 })
+  assert.equal(r.parts.rightArm.parent, 'body')
+  assert.equal(r.parts.rightArm.z, 2)
+  assert.equal(r.parts.rightHand, moved.parts.rightHand, '바뀌지 않은 파츠는 같은 객체')
+  closeP(pivotWorld(r, 'rightHand'), { x: 60, y: 180 })
 })

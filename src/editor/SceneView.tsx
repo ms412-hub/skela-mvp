@@ -8,6 +8,7 @@ import type { Character, EditorState } from '../character/CharacterModel'
 import { drawOrder, hitTest, moveByWorld, pivotWorld, setPivotKeepPlace, updatePart, worldCorners, worldMatrices, isDescendant } from '../character/CharacterModel'
 import { apply, applyLinear, invert } from '../character/Transform'
 import type { Mat, Vec2 } from '../character/Transform'
+import { pinchCamera } from './pinch'
 
 export type Tool = 'move' | 'rotate' | 'scale' | 'pivot' | 'paint'
 export type SceneApi = { frameAll: () => void; frameSelection: () => void }
@@ -49,6 +50,12 @@ export default function SceneView(p: Props) {
   const size = useRef({ w: 1, h: 1, dpr: 1 })
   const fitted = useRef(false)
   const hover = useRef<Vec2 | null>(null) // 브러시 커서 (화면 좌표)
+  // 터치: 누르고 있는 손가락들. 두 손가락이 되면 확대/이동 모드 (진행 중이던 조작은 끝낸다)
+  const pointers = useRef(new Map<number, Vec2>())
+  const pinch = useRef<{ cam: { x: number; y: number; zoom: number }; a: number; b: number } | null>(null)
+  const pinchStart = useRef<{ a: Vec2; b: Vec2 } | null>(null)
+  const ignoreUntilUp = useRef(false) // 두 손가락 동작이 끝난 뒤 남은 손가락이 갑자기 파츠를 끌지 않게
+  const touchScale = useRef(1) // 손가락은 마우스보다 굵어서 기즈모 판정 범위를 넓힌다
 
   const toScreen = (q: Vec2): Vec2 => ({ x: (q.x - cam.current.x) * cam.current.zoom + size.current.w / 2, y: (q.y - cam.current.y) * cam.current.zoom + size.current.h / 2 })
   const toWorld = (q: Vec2): Vec2 => ({ x: (q.x - size.current.w / 2) / cam.current.zoom + cam.current.x, y: (q.y - size.current.h / 2) / cam.current.zoom + cam.current.y })
@@ -90,6 +97,7 @@ export default function SceneView(p: Props) {
     const { char, state, selection, tool, showJoints } = props.current
     const { w, h, dpr } = size.current
     c.style.cursor = tool === 'paint' ? 'none' : 'default'
+    c.dataset.zoom = cam.current.zoom.toFixed(4) // 시험에서 확대 비율을 읽기 위한 값
     const ctx = c.getContext('2d')!
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.fillStyle = '#25272f'
@@ -209,12 +217,13 @@ export default function SceneView(p: Props) {
     const g = gizmo(s, W)
     if (!g) return null
     const { P, ax, ay, id } = g
+    const T = touchScale.current
     const near = (to: Vec2) => {
       const dx = to.x - P.x, dy = to.y - P.y, L2 = dx * dx + dy * dy
       const t = Math.max(0, Math.min(1, ((q.x - P.x) * dx + (q.y - P.y) * dy) / L2))
-      return Math.hypot(q.x - P.x - t * dx, q.y - P.y - t * dy) < 8 && t > 0.15
+      return Math.hypot(q.x - P.x - t * dx, q.y - P.y - t * dy) < 8 * T && t > 0.15
     }
-    const center = Math.abs(q.x - P.x) <= 10 && Math.abs(q.y - P.y) <= 10
+    const center = Math.abs(q.x - P.x) <= 10 * T && Math.abs(q.y - P.y) <= 10 * T
     const { tool, selection } = props.current
     if (tool === 'move') {
       const axis = center ? 'free' : near({ x: P.x + GIZMO + 10, y: P.y }) ? 'x' : near({ x: P.x, y: P.y - GIZMO - 10 }) ? 'y' : null
@@ -222,7 +231,7 @@ export default function SceneView(p: Props) {
       return { kind: 'move', axis, sx: q.x, sy: q.y, base: s, ids: roots(s, selection), moved: false }
     }
     if (tool === 'rotate') {
-      if (Math.abs(Math.hypot(q.x - P.x, q.y - P.y) - GIZMO * 0.9) > 9) return null
+      if (Math.abs(Math.hypot(q.x - P.x, q.y - P.y) - GIZMO * 0.9) > 9 * T) return null
       return { kind: 'rotate', start: Math.atan2(q.y - P.y, q.x - P.x), base: s, ids: roots(s, selection), P, moved: false }
     }
     if (tool === 'scale') {
@@ -230,7 +239,7 @@ export default function SceneView(p: Props) {
       if (!axis) return null
       return { kind: 'scale', axis, sx: q.x, sy: q.y, base: s, id, P, dir: axis === 'x' ? ax : ay, moved: false }
     }
-    if (Math.hypot(q.x - P.x, q.y - P.y) <= 16) return { kind: 'pivot', base: s, id, moved: false }
+    if (Math.hypot(q.x - P.x, q.y - P.y) <= 16 * T) return { kind: 'pivot', base: s, id, moved: false }
     return null
   }
 
@@ -261,9 +270,27 @@ export default function SceneView(p: Props) {
       cam.current.y += before.y - after.y
       draw()
     }
+    const endDragNow = () => {
+      const d = drag.current
+      drag.current = null
+      if (d?.kind === 'paint') { props.current.paint?.onStroke('end', toWorld(hover.current ?? { x: 0, y: 0 })); return }
+      if (d && d.kind !== 'pan' && 'moved' in d && d.moved) props.current.onCommit(props.current.state)
+    }
     const onDown = (e: PointerEvent) => {
       const q = local(e)
       c.setPointerCapture(e.pointerId)
+      touchScale.current = e.pointerType === 'touch' || e.pointerType === 'pen' ? 1.9 : 1
+      pointers.current.set(e.pointerId, q)
+      if (pointers.current.size === 2) {
+        // 두 번째 손가락: 하던 조작을 끝내고 확대/이동 모드로
+        endDragNow()
+        const [a, b] = [...pointers.current.values()]
+        pinchStart.current = { a, b }
+        pinch.current = { cam: { ...cam.current }, a: [...pointers.current.keys()][0], b: [...pointers.current.keys()][1] }
+        ignoreUntilUp.current = true
+        return
+      }
+      if (pointers.current.size > 2 || ignoreUntilUp.current) return
       if (e.button === 1 || e.button === 2 || e.altKey) {
         drag.current = { kind: 'pan', sx: q.x, sy: q.y, cx: cam.current.x, cy: cam.current.y }
         return
@@ -302,6 +329,17 @@ export default function SceneView(p: Props) {
     }
     const onMove = (e: PointerEvent) => {
       const q = local(e)
+      if (pointers.current.has(e.pointerId)) pointers.current.set(e.pointerId, q)
+      if (pinch.current && pinchStart.current) {
+        const a = pointers.current.get(pinch.current.a), b = pointers.current.get(pinch.current.b)
+        if (a && b) {
+          const next = pinchCamera({ cam: pinch.current.cam, a: pinchStart.current.a, b: pinchStart.current.b }, { a, b }, size.current)
+          cam.current = next
+          draw()
+        }
+        return
+      }
+      if (ignoreUntilUp.current) return
       if (props.current.tool === 'paint') { hover.current = q; if (!drag.current) draw() }
       const d = drag.current
       if (!d) return
@@ -342,6 +380,10 @@ export default function SceneView(p: Props) {
       pr.onLive(s)
     }
     const onUp = (e: PointerEvent) => {
+      pointers.current.delete(e.pointerId)
+      if (pinch.current && pointers.current.size < 2) { pinch.current = null; pinchStart.current = null }
+      if (pointers.current.size === 0) ignoreUntilUp.current = false
+      if (ignoreUntilUp.current) { if (c.hasPointerCapture(e.pointerId)) c.releasePointerCapture(e.pointerId); return }
       const d = drag.current
       drag.current = null
       if (c.hasPointerCapture(e.pointerId)) c.releasePointerCapture(e.pointerId)
