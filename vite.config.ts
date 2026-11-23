@@ -4,4 +4,10 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   base: '/skela-mvp/',
+  build: {
+    rollupOptions: {
+      // index.html: 캐릭터 도구, room.html: Skela Room (3D 인테리어 편집기)
+      input: { main: 'index.html', room: 'room.html' },
+    },
+  },
 })

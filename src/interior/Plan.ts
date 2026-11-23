@@ -134,7 +134,12 @@ export function pointInFurniture(f: Furniture, p: Vec): boolean {
 
 export function planBounds(plan: Plan): { x0: number; y0: number; x1: number; y1: number } {
   const pts: Vec[] = plan.walls.flatMap((w) => [w.a, w.b])
-  for (const f of plan.furniture) pts.push({ x: f.x - f.w / 2, y: f.y - f.d / 2 }, { x: f.x + f.w / 2, y: f.y + f.d / 2 })
+  // 돌린 가구는 돌린 뒤의 네 모서리로 잰다 (90° 돌린 옷장이 벽 밖으로 잡히지 않게)
+  for (const f of plan.furniture) {
+    const r = (f.rot * Math.PI) / 180, c = Math.abs(Math.cos(r)), s = Math.abs(Math.sin(r))
+    const ex = (f.w / 2) * c + (f.d / 2) * s, ey = (f.w / 2) * s + (f.d / 2) * c
+    pts.push({ x: f.x - ex, y: f.y - ey }, { x: f.x + ex, y: f.y + ey })
+  }
   if (!pts.length) return { x0: 0, y0: 0, x1: 600, y1: 500 }
   return { x0: Math.min(...pts.map((p) => p.x)), y0: Math.min(...pts.map((p) => p.y)), x1: Math.max(...pts.map((p) => p.x)), y1: Math.max(...pts.map((p) => p.y)) }
 }
