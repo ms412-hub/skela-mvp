@@ -29,7 +29,7 @@ type View = 'plan' | '3d' | 'walk'
 // 페이지가 window.__SKELA_START = '템플릿 id'를 주면 그 템플릿으로 시작한다 (예: 60평 전용 페이지)
 const START_ID = (window as unknown as { __SKELA_START?: string }).__SKELA_START
 // 시작 템플릿을 고치면 r 번호를 올려서, 예전 자동 저장 대신 새 템플릿으로 열리게 한다
-const STORE_KEY = 'skela-room-plan' + (START_ID ? `-${START_ID}-r3` : '')
+const STORE_KEY = 'skela-room-plan' + (START_ID ? `-${START_ID}-r4` : '')
 const GRID = 10 // 벽 그리기 격자 (cm)
 const MOVE_SNAP = 5 // 가구 이동 격자 (cm)
 const EYE = 160 // 걷기 눈높이 (cm)

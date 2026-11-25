@@ -92,6 +92,7 @@ export const CATALOG: FurnitureType[] = [
     { x: 0, z: 0, y: 10, w: 150, d: 65, h: 0.5, color: '#cfe3ea' },
   ] },
   { id: 'tile', name: '욕실 타일', w: 200, d: 200, h: 1, color: '#d4d9db', boxes: [{ x: 0, z: 0, y: 0, w: 200, d: 200, h: 1 }] },
+  { id: 'floortile', name: '바닥 타일', w: 300, d: 300, h: 1, color: '#d3cdc1', boxes: [{ x: 0, z: 0, y: 0, w: 300, d: 300, h: 1 }] },
   { id: 'rug', name: '러그', w: 200, d: 140, h: 2, color: '#a85a5a', boxes: [{ x: 0, z: 0, y: 0, w: 200, d: 140, h: 2 }] },
 ]
 

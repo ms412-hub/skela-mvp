@@ -52,5 +52,11 @@ test('5룸 대형 아파트: 약 60평, 문 7개(현관·안방 욕실 포함), 
   for (const k of ['toilet', 'basin', 'bathtub', 'tile']) assert.equal(p.furniture.filter((f) => f.type === k).length, 1, k)
   assert.equal(p.openings.filter((o) => o.kind === 'window').length, 8)
   assert.equal(p.furniture.filter((f) => f.type === 'bed').length, 5)
+  // 거실과 주방 사이 벽 두 개, 가운데는 2m 통로
+  const mid = p.walls.filter((w) => w.a.y === 700 && w.b.y === 700)
+  assert.equal(mid.length, 2)
+  assert.equal(Math.min(...mid.map((w) => Math.max(w.a.x, w.b.x))) , 700)
+  assert.equal(Math.max(...mid.map((w) => Math.min(w.a.x, w.b.x))) , 900)
+  assert.equal(p.furniture.filter((f) => f.type === 'floortile').length, 1)
   assert.equal(p.openings[0].wallId, 'wall3', '현관이 첫 문이어야 걷기가 현관에서 시작한다')
 })

@@ -119,7 +119,7 @@ export const TEMPLATES: RoomTemplate[] = [
     },
   },
   {
-    id: 'fiveroom', name: '5룸 대형 아파트', desc: '16 × 12.4 m · 방 5, 안방 욕실, 거실, 주방 · 약 60평',
+    id: 'fiveroom', name: '5룸 대형 아파트', desc: '16 × 12.4 m · 방 5, 안방 욕실, 거실과 나뉜 주방 · 약 60평',
     build: () => {
       let p = { ...emptyPlan(), name: '5룸 대형 아파트 (60평)', floorColor: '#a7835f' }
       p = rect(p, 0, 0, 1600, 1240) // 198.4 m² ≈ 60평. wall1 위, wall2 오른쪽, wall3 아래, wall4 왼쪽
@@ -130,10 +130,13 @@ export const TEMPLATES: RoomTemplate[] = [
       p = addWall(p, { x: 1100, y: 830 }, { x: 1600, y: 830 }) // wall9: 방4 | 방5
       p = addWall(p, { x: 220, y: 400 }, { x: 220, y: 620 }) // wall10: 안방 욕실 오른쪽
       p = addWall(p, { x: 0, y: 400 }, { x: 220, y: 400 }) // wall11: 안방 욕실 위
+      // 거실 | 주방: 벽으로 나누고 가운데 2m(x 700~900)는 트인 통로로 둔다
+      p = addWall(p, { x: 500, y: 700 }, { x: 700, y: 700 }) // wall12
+      p = addWall(p, { x: 900, y: 700 }, { x: 1100, y: 700 }) // wall13
       // 문 (현관을 먼저 넣어야 걷기가 현관에서 시작한다)
       p = addOpening(p, 'wall3', 0.5, 'door') // 현관 (x=800)
       p = addOpening(p, 'wall5', 540 / 1240, 'door') // 방1
-      p = addOpening(p, 'wall5', 700 / 1240, 'door') // 방2
+      p = addOpening(p, 'wall5', 780 / 1240, 'door') // 방2 (주방 쪽으로 나온다)
       p = addOpening(p, 'wall7', 330 / 1240, 'door') // 방3
       p = addOpening(p, 'wall7', 520 / 1240, 'door') // 방4
       p = addOpening(p, 'wall7', 930 / 1240, 'door') // 방5
@@ -173,6 +176,7 @@ export const TEMPLATES: RoomTemplate[] = [
       p = put(p, 'bookshelf', 520, 150, 270)
       p = put(p, 'bookshelf', 1080, 150, 90)
       // 주방·식당 (500~1100, 700~1240)
+      p = put(p, 'floortile', 800, 970, 0, { w: 590, d: 530 }) // 주방 바닥은 타일로 거실과 구분
       p = put(p, 'counter', 970, 1205, 180)
       p = put(p, 'fridge', 555, 1197, 180)
       p = put(p, 'dining', 800, 900)
