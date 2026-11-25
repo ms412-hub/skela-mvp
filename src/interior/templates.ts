@@ -118,6 +118,77 @@ export const TEMPLATES: RoomTemplate[] = [
     },
   },
   {
+    id: 'fiveroom', name: '5룸 대형 아파트', desc: '16 × 12.4 m · 방 5, 거실, 주방 · 약 60평',
+    build: () => {
+      let p = { ...emptyPlan(), name: '5룸 대형 아파트 (60평)', floorColor: '#a7835f' }
+      p = rect(p, 0, 0, 1600, 1240) // 198.4 m² ≈ 60평. wall1 위, wall2 오른쪽, wall3 아래, wall4 왼쪽
+      p = addWall(p, { x: 500, y: 0 }, { x: 500, y: 1240 }) // wall5: 왼쪽 방들 | 거실·주방
+      p = addWall(p, { x: 0, y: 620 }, { x: 500, y: 620 }) // wall6: 방1(안방) | 방2
+      p = addWall(p, { x: 1100, y: 0 }, { x: 1100, y: 1240 }) // wall7: 거실·주방 | 오른쪽 방들
+      p = addWall(p, { x: 1100, y: 420 }, { x: 1600, y: 420 }) // wall8: 방3 | 방4
+      p = addWall(p, { x: 1100, y: 830 }, { x: 1600, y: 830 }) // wall9: 방4 | 방5
+      // 문 (현관을 먼저 넣어야 걷기가 현관에서 시작한다)
+      p = addOpening(p, 'wall3', 0.5, 'door') // 현관 (x=800)
+      p = addOpening(p, 'wall5', 540 / 1240, 'door') // 방1
+      p = addOpening(p, 'wall5', 700 / 1240, 'door') // 방2
+      p = addOpening(p, 'wall7', 330 / 1240, 'door') // 방3
+      p = addOpening(p, 'wall7', 520 / 1240, 'door') // 방4
+      p = addOpening(p, 'wall7', 930 / 1240, 'door') // 방5
+      // 창문
+      p = addOpening(p, 'wall1', 250 / 1600, 'window') // 방1
+      p = addOpening(p, 'wall1', 600 / 1600, 'window') // 거실
+      p = addOpening(p, 'wall1', 1000 / 1600, 'window') // 거실
+      p = addOpening(p, 'wall1', 1350 / 1600, 'window') // 방3
+      p = addOpening(p, 'wall2', 625 / 1240, 'window') // 방4
+      p = addOpening(p, 'wall2', 1035 / 1240, 'window') // 방5
+      p = addOpening(p, 'wall4', 0.25, 'window') // 방2 (y=930)
+      p = addOpening(p, 'wall3', 1350 / 1600, 'window') // 방2 (x=250)
+      // 방1 안방 (0~500, 0~620)
+      p = put(p, 'bed', 250, 120)
+      p = put(p, 'wardrobe', 467, 150, 90)
+      p = put(p, 'wardrobe', 467, 270, 90)
+      p = put(p, 'desk', 110, 580)
+      p = put(p, 'chair', 110, 525)
+      p = put(p, 'rug', 250, 380)
+      p = put(p, 'bookshelf', 20, 400, 270)
+      // 방2 (0~500, 620~1240)
+      p = put(p, 'bed', 110, 745)
+      p = put(p, 'wardrobe', 330, 655)
+      p = put(p, 'desk', 330, 1200)
+      p = put(p, 'chair', 330, 1145)
+      // 거실 (500~1100, 0~700)
+      p = put(p, 'tv', 800, 25)
+      p = put(p, 'rug', 800, 280)
+      p = put(p, 'table', 800, 290)
+      p = put(p, 'sofa', 800, 480, 180)
+      p = put(p, 'bookshelf', 520, 150, 270)
+      p = put(p, 'bookshelf', 1080, 150, 90)
+      // 주방·식당 (500~1100, 700~1240)
+      p = put(p, 'counter', 970, 1205, 180)
+      p = put(p, 'fridge', 555, 1197, 180)
+      p = put(p, 'dining', 800, 900)
+      p = put(p, 'chair', 770, 835)
+      p = put(p, 'chair', 830, 835)
+      p = put(p, 'chair', 770, 965, 180)
+      p = put(p, 'chair', 830, 965, 180)
+      // 방3 (1100~1600, 0~420)
+      p = put(p, 'bed', 1350, 120)
+      p = put(p, 'desk', 1500, 385)
+      p = put(p, 'chair', 1500, 330)
+      // 방4 (1100~1600, 420~830)
+      p = put(p, 'bed', 1480, 545)
+      p = put(p, 'wardrobe', 1133, 700, 270)
+      p = put(p, 'desk', 1300, 790)
+      p = put(p, 'chair', 1300, 735)
+      // 방5 (1100~1600, 830~1240)
+      p = put(p, 'bed', 1480, 955)
+      p = put(p, 'desk', 1250, 1200)
+      p = put(p, 'chair', 1250, 1145)
+      p = put(p, 'bookshelf', 1120, 1100, 270)
+      return p
+    },
+  },
+  {
     id: 'empty', name: '빈 방', desc: '5 × 4 m · 문 하나',
     build: () => {
       let p = { ...emptyPlan(), name: '빈 방' }
