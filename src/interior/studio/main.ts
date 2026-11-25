@@ -158,7 +158,8 @@ sun.shadow.mapSize.set(2048, 2048)
 sun.shadow.bias = -0.0005
 scene.add(sun, sun.target)
 
-const persp = new THREE.PerspectiveCamera(50, 1, 5, 30000)
+// near를 10cm로: 깊이 정밀도가 두 배가 되어 멀리서 보는 면이 덜 지글거린다 (걷기 충돌 반경 22cm보다 작다)
+const persp = new THREE.PerspectiveCamera(50, 1, 10, 30000)
 const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, -10000, 10000)
 let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = persp
 
@@ -188,7 +189,7 @@ const world = new THREE.Group()
 scene.add(world)
 const furnGroups = new Map<string, THREE.Group>()
 type Ref = { kind: 'furniture' | 'wall' | 'opening' | 'floor'; id: string }
-type WallFade = { mesh: THREE.Mesh; px: number; pz: number; nx: number; nz: number; inside: number }
+type WallFade = { mesh: THREE.Mesh; px: number; pz: number; nx: number; nz: number; inside: number; faded: boolean }
 let wallFades: WallFade[] = []
 let wallSolids: { cx: number; cz: number; hw: number; hd: number; c: number; s: number }[] = []
 
@@ -245,7 +246,7 @@ function rebuild() {
       mat.transparent = true
       const a = THREE.MathUtils.degToRad(box.rotDeg)
       const nx = -Math.sin(a), nz = Math.cos(a)
-      wallFades.push({ mesh, px: box.cx, pz: box.cz, nx, nz, inside: Math.sign((cx - box.cx) * nx + (cz - box.cz) * nz) || 1 })
+      wallFades.push({ mesh, px: box.cx, pz: box.cz, nx, nz, inside: Math.sign((cx - box.cx) * nx + (cz - box.cz) * nz) || 1, faded: false })
       if (box.cy - box.h / 2 < 100) wallSolids.push({ cx: box.cx, cz: box.cz, hw: box.w / 2, hd: box.d / 2, c: Math.cos(a), s: Math.sin(a) })
     }
     world.add(mesh)
@@ -271,7 +272,8 @@ function rebuild() {
   sc.near = 10
   sc.far = size * 4
   sc.updateProjectionMatrix()
-  grid.position.set(cx, 0.5, cz)
+  // 격자는 집 바닥(윗면 0) 아래에 둔다: 집 안 바닥과 겹쳐 지글거리지 않고, 집 밖에서만 보인다
+  grid.position.set(cx, -2.5, cz)
   applyHighlight()
   attachGizmo()
 }
@@ -930,8 +932,11 @@ function frame() {
     // 카메라 쪽 벽은 반투명하게: 방 안이 보이게
     camera.getWorldPosition(tmp)
     for (const f of wallFades) {
-      const side = Math.sign((tmp.x - f.px) * f.nx + (tmp.z - f.pz) * f.nz)
-      ;(f.mesh.material as THREE.MeshStandardMaterial).opacity = side !== f.inside ? 0.18 : 1
+      // 벽과 거의 나란할 때 투명↔불투명이 깜빡이지 않게 30cm 여유를 둔다
+      const dist = ((tmp.x - f.px) * f.nx + (tmp.z - f.pz) * f.nz) * f.inside
+      if (dist < -30) f.faded = true
+      else if (dist > 30) f.faded = false
+      ;(f.mesh.material as THREE.MeshStandardMaterial).opacity = f.faded ? 0.18 : 1
     }
   } else {
     orbitPlan.update()

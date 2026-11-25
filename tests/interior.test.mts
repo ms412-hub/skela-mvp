@@ -6,7 +6,7 @@ import {
   nearestWall, nearestOnSegment, pointInFurniture, planBounds, snapTo, nextId, toPlanFile, fromPlanFile, wallLength, MIN_WALL,
 } from '../src/interior/Plan.ts'
 import type { Plan } from '../src/interior/Plan.ts'
-import { buildBoxes, wallBoxes } from '../src/interior/geometry.ts'
+import { buildBoxes, wallBoxes, FIGHT_STEP } from '../src/interior/geometry.ts'
 import { CATALOG, furnitureType } from '../src/interior/catalog.ts'
 import { createHistory } from '../src/undoManager.ts'
 
@@ -58,7 +58,7 @@ test('3D 상자: 문이 있는 벽은 위·옆 상자로 나뉘고, 창문은 �
   p = addWall(p, { x: 0, y: 0 }, { x: 400, y: 0 })
   const plain = wallBoxes(p, p.walls[0])
   assert.equal(plain.length, 1)
-  close(plain[0].w, 400 + 10, 1e-9) // 두께의 절반씩 양끝을 늘림
+  close(plain[0].w, 400 + 10 - 2 * FIGHT_STEP, 1e-9) // 두께의 절반씩 양끝을 늘림 (떨림 방지로 1mm 덜)
   close(plain[0].h, 250)
   p = addOpening(p, 'wall1', 0.5, 'door')
   const withDoor = wallBoxes(p, p.walls[0])
@@ -79,7 +79,7 @@ test('3D 상자: 벽 방향이 다르면 회전 각이 맞고, 상자가 벽 선
   const [b] = wallBoxes(p, p.walls[0])
   close(b.rotDeg, 90)
   close(b.cx, 100); close(b.cz, 200)
-  close(b.w, 210)
+  close(b.w, 210 - 2 * FIGHT_STEP)
 })
 
 test('가구: 회전하면 상자들이 가구 가운데를 기준으로 같이 돈다', () => {

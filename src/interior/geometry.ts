@@ -3,7 +3,7 @@
 // 웹 3D 보기와 Unity 가져오기가 모두 이 목록을 그대로 쓴다. 3D 모델 파일 없이 상자(큐브)만으로 방을 만든다.
 // 좌표: cx·cz는 평면도의 x·y(cm), cy는 바닥에서 상자 가운데까지의 높이(cm).
 // w는 상자의 "가로"(벽이면 벽 길이 방향), d는 깊이(벽이면 두께), h는 높이. rotDeg는 평면도에서 상자를 돌린 각도(시계 방향 +).
-import { CATALOG, furnitureType } from './catalog.ts'
+import { CATALOG, furnitureType, type BoxSpec } from './catalog.ts'
 import type { Plan, Wall } from './Plan.ts'
 import { planBounds, wallLength } from './Plan.ts'
 
@@ -11,6 +11,8 @@ import { planBounds, wallLength } from './Plan.ts'
 export type SceneBox = { kind: 'wall' | 'floor' | 'furniture' | 'door' | 'glass'; id: string; cx: number; cy: number; cz: number; w: number; h: number; d: number; rotDeg: number; color: string; opacity?: number }
 
 const EPS = 0.01
+// 떨림(Z-파이팅) 방지용 간격 1mm (아래 wallBoxes, inflate)
+export const FIGHT_STEP = 0.1
 
 // 벽 하나를 상자들로: 문·창문 자리는 비우고, 창문 아래와 문·창문 위는 막는다.
 // 벽 양 끝은 두께의 절반만큼 늘려서 모서리에 틈이 생기지 않게 한다.
@@ -19,7 +21,12 @@ export function wallBoxes(plan: Plan, wall: Wall): SceneBox[] {
   if (len < EPS) return []
   const ang = (Math.atan2(wall.b.y - wall.a.y, wall.b.x - wall.a.x) * 180) / Math.PI
   const ux = (wall.b.x - wall.a.x) / len, uy = (wall.b.y - wall.a.y) / len
-  const ext = wall.thickness / 2
+  // 떨림 방지: 벽끼리 만나는 모서리에서 윗면·바깥면이 겹치지 않게
+  //  - 벽 끝은 두께의 절반보다 1mm 덜 늘려서, 끝면이 옆 벽 안에 숨게 한다
+  //  - 벽마다 높이를 1mm씩 다르게 해서, 모서리에서 겹치는 윗면이 같은 높이가 되지 않게 한다
+  const idx = Math.max(0, plan.walls.indexOf(wall))
+  const ext = Math.max(0, wall.thickness / 2 - FIGHT_STEP)
+  const top = wall.height + idx * FIGHT_STEP
   const out: SceneBox[] = []
   // s: 벽 시작점 a에서 벽을 따라 잰 거리(-ext ~ len+ext)
   const push = (s0: number, s1: number, y0: number, y1: number, tag: string) => {
@@ -31,13 +38,21 @@ export function wallBoxes(plan: Plan, wall: Wall): SceneBox[] {
   let cursor = -ext
   let k = 0
   for (const { o, s0, s1 } of ops) {
-    push(cursor, Math.max(cursor, s0), 0, wall.height, `s${k++}`)
-    if (o.sill > EPS) push(s0, s1, 0, Math.min(o.sill, wall.height), `${o.id}:below`)
-    push(s0, s1, Math.min(o.sill + o.height, wall.height), wall.height, `${o.id}:above`)
+    push(cursor, Math.max(cursor, s0), 0, top, `s${k++}`)
+    if (o.sill > EPS) push(s0, s1, 0, Math.min(o.sill, top), `${o.id}:below`)
+    push(s0, s1, Math.min(o.sill + o.height, top), top, `${o.id}:above`)
     cursor = Math.max(cursor, s1)
   }
-  push(cursor, len + ext, 0, wall.height, `s${k}`)
+  push(cursor, len + ext, 0, top, `s${k}`)
   return out
+}
+
+// 떨림(Z-파이팅) 방지: 한 가구 안에서 같은 평면에 면이 겹치면 화면이 지글거린다.
+// 뒤에 오는 상자(손잡이·문·선반 같은 작은 부품)일수록 아주 조금씩 키워서 면이 겹치지 않게 한다.
+// 1단계 = 사방 1mm. 눈으로는 보이지 않고, 겹치던 부품은 살짝 앞으로 나와 보인다.
+export function inflate(b: BoxSpec, index: number): BoxSpec {
+  const g = index * FIGHT_STEP
+  return { ...b, y: b.y - g, w: b.w + 2 * g, h: b.h + 2 * g, d: b.d + 2 * g }
 }
 
 export function furnitureBoxes(plan: Plan): SceneBox[] {
@@ -50,7 +65,8 @@ export function furnitureBoxes(plan: Plan): SceneBox[] {
     const c = Math.cos(r), s = Math.sin(r)
     t.boxes.forEach((b, i) => {
       const lx = b.x * sx, lz = b.z * sz
-      out.push({ kind: 'furniture', id: `${f.id}:${i}`, cx: f.x + c * lx - s * lz, cz: f.y + s * lx + c * lz, cy: (b.y + b.h / 2) * sh, w: b.w * sx, h: b.h * sh, d: b.d * sz, rotDeg: f.rot, color: b.color ?? f.color })
+      const g = i * FIGHT_STEP // 크기를 바꾼 뒤에 키워야 늘린 가구에서도 간격이 그대로다
+      out.push({ kind: 'furniture', id: `${f.id}:${i}`, cx: f.x + c * lx - s * lz, cz: f.y + s * lx + c * lz, cy: (b.y + b.h / 2) * sh, w: b.w * sx + 2 * g, h: b.h * sh + 2 * g, d: b.d * sz + 2 * g, rotDeg: f.rot, color: b.color ?? f.color })
     })
   }
   return out
