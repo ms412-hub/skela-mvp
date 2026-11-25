@@ -117,7 +117,7 @@ namespace Skela
             ceil.SetActive(false);
             room.ceiling = ceil;
 
-            // 5) 조명: 햇빛이 없으면 하나, 방 안 조명 하나
+            // 5) 조명: 햇빛이 없으면 하나, 천장 조명은 집 크기에 맞춰 여러 개
             bool hasSun = false;
             foreach (var l in UnityEngine.Object.FindObjectsByType<Light>(FindObjectsSortMode.None))
                 if (l.type == LightType.Directional && l.enabled) hasSun = true;
@@ -130,14 +130,23 @@ namespace Skela
                 sun.shadows = LightShadows.Soft;
                 sun.transform.rotation = Quaternion.Euler(55, -35, 0);
             }
-            var lamp = new GameObject("천장 조명").AddComponent<Light>();
-            lamp.transform.SetParent(root.transform, false);
-            lamp.type = LightType.Point;
-            lamp.range = room.size * 1.2f;
-            lamp.intensity = 1.5f;
-            lamp.color = new Color(1f, 0.95f, 0.86f);
-            lamp.shadows = LightShadows.None;
-            lamp.transform.position = new Vector3(room.center.x, ch * CM - 0.2f, room.center.z);
+            // 천장 조명: 4.5m 간격 격자로 놓는다 (원룸은 2개, 60평은 12개). 넓은 집도 방마다 밝게.
+            var lamps = new GameObject("천장 조명");
+            lamps.transform.SetParent(root.transform, false);
+            int nx = Mathf.Max(1, Mathf.CeilToInt(fb.size.x / 4.5f)), nz = Mathf.Max(1, Mathf.CeilToInt(fb.size.z / 4.5f));
+            for (int ix = 0; ix < nx; ix++)
+                for (int iz = 0; iz < nz; iz++)
+                {
+                    var lamp = new GameObject($"조명 {ix * nz + iz + 1}").AddComponent<Light>();
+                    lamp.transform.SetParent(lamps.transform, false);
+                    lamp.type = LightType.Point;
+                    lamp.range = 5.5f;
+                    lamp.intensity = 1.3f;
+                    lamp.color = new Color(1f, 0.95f, 0.86f);
+                    lamp.shadows = LightShadows.None;
+                    float px = fb.min.x + fb.size.x * (ix + 0.5f) / nx, pz = fb.min.z + fb.size.z * (iz + 0.5f) / nz;
+                    lamp.transform.position = new Vector3(px, ch * CM - 0.2f, pz);
+                }
 
             return root;
         }

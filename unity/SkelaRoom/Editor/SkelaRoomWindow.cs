@@ -52,20 +52,7 @@ namespace Skela
         {
             try
             {
-                var f = SkelaRoomBuilder.Parse(json);
-                // 전에 만든 방은 지운다 (Ctrl+Z로 되살릴 수 있다)
-                foreach (var old in FindObjectsByType<SkelaRoom>(FindObjectsSortMode.None))
-                    Undo.DestroyObjectImmediate(old.gameObject);
-
-                var root = SkelaRoomBuilder.Build(f, Persist);
-                Undo.RegisterCreatedObjectUndo(root, "Skela 방 만들기");
-                var room = root.GetComponent<SkelaRoom>();
-                SetupCamera(room);
-
-                Selection.activeGameObject = root;
-                SceneView.lastActiveSceneView?.FrameSelected();
-                EditorSceneManager.MarkSceneDirty(root.scene);
-                AssetDatabase.SaveAssets();
+                var f = BuildRoom(json);
                 msg = $"'{f.name}' 방을 만들었어요 (상자 {f.boxes.Length}개).\n위의 ▶ Play를 눌러 둘러보세요. 장면을 저장하려면 Ctrl+S.";
                 msgType = MessageType.Info;
             }
@@ -74,6 +61,25 @@ namespace Skela
                 msg = e.Message;
                 msgType = MessageType.Error;
             }
+        }
+
+        // JSON으로 방을 만든다. 샘플 메뉴(SkelaSamples.cs)도 이 함수를 쓴다. 형식이 틀리면 이유를 담아 throw한다.
+        public static SceneFile BuildRoom(string json)
+        {
+            var f = SkelaRoomBuilder.Parse(json);
+            // 전에 만든 방은 지운다 (Ctrl+Z로 되살릴 수 있다)
+            foreach (var old in FindObjectsByType<SkelaRoom>(FindObjectsSortMode.None))
+                Undo.DestroyObjectImmediate(old.gameObject);
+
+            var root = SkelaRoomBuilder.Build(f, Persist);
+            Undo.RegisterCreatedObjectUndo(root, "Skela 방 만들기");
+            SetupCamera(root.GetComponent<SkelaRoom>());
+
+            Selection.activeGameObject = root;
+            SceneView.lastActiveSceneView?.FrameSelected();
+            EditorSceneManager.MarkSceneDirty(root.scene);
+            AssetDatabase.SaveAssets();
+            return f;
         }
 
         // 머티리얼을 에셋으로 저장해야 장면을 저장·다시 열어도 색이 남는다. 같은 색은 다시 쓴다.
