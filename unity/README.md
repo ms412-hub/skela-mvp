@@ -13,14 +13,14 @@ Assets/
     SkelaRoomViewer.cs    Play 화면 카메라 (둘러보기 / 걷기 / 위에서 보기)
     Editor/
       SkelaRoomWindow.cs  메뉴 "Skela → 방 불러오기" 창
-      SkelaSamples.cs     메뉴 "Skela → 샘플: 60평 5룸 아파트" (붙여넣기 없이 바로 만들기)
+      SkelaSamples.cs     메뉴 "Skela → 샘플: 60평 …" (붙여넣기 없이 바로 만들기)
 ```
 
 유니티로 돌아가면 잠깐 컴파일한 뒤 위 메뉴에 **Skela**가 생겨요.
 
 ## 바로 해보기: 60평 샘플
 
-**Skela → 샘플: 60평 5룸 아파트**를 누르면 붙여넣기 없이 바로 만들어져요. 그다음 ▶ Play.
+**Skela → 샘플: 60평 복도형 아파트** (또는 5룸 아파트)를 누르면 붙여넣기 없이 바로 만들어져요. 그다음 ▶ Play.
 
 ## 쓰는 방법 (방을 바꿀 때마다)
 

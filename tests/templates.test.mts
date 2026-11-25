@@ -60,3 +60,22 @@ test('5룸 대형 아파트: 약 60평, 문 7개(현관·안방 욕실 포함), 
   assert.equal(p.furniture.filter((f) => f.type === 'floortile').length, 1)
   assert.equal(p.openings[0].wallId, 'wall3', '현관이 첫 문이어야 걷기가 현관에서 시작한다')
 })
+
+test('복도형 아파트: 약 60평, 현관에서 거실까지 복도가 비어 있다', async () => {
+  const { planBounds } = await import('../src/interior/Plan.ts')
+  const p = TEMPLATES.find((t) => t.id === 'corridor')!.build()
+  const b = planBounds(p)
+  const pyeong = ((b.x1 - b.x0) * (b.y1 - b.y0)) / 10000 / 3.3058
+  assert.ok(Math.abs(pyeong - 60) < 0.5, `평수 ${pyeong}`)
+  assert.equal(p.openings.filter((o) => o.kind === 'door').length, 10)
+  assert.equal(p.openings.filter((o) => o.kind === 'window').length, 13)
+  assert.equal(p.furniture.filter((f) => f.type === 'bed').length, 5)
+  assert.equal(p.furniture.filter((f) => f.type === 'toilet').length, 2)
+  assert.equal(p.openings[0].wallId, 'wall4', '현관(왼쪽 벽)이 첫 문')
+  // 복도(y 416~576, x 0~1500)에는 가구가 없어야 한다
+  for (const f of p.furniture) {
+    const ex = f.rot % 180 === 0 ? f.w / 2 : f.d / 2, ey = f.rot % 180 === 0 ? f.d / 2 : f.w / 2
+    const inHall = f.x - ex < 1500 && f.y + ey > 421 && f.y - ey < 571
+    assert.ok(!inHall, `${f.id}(${f.type})가 복도를 막는다`)
+  }
+})
