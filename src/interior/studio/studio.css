@@ -113,6 +113,7 @@ body { background: var(--bg); color: var(--ink); font-family: var(--font-ui); fo
 .rs-dialog { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; width: min(560px, 100%); max-height: calc(100% - 32px); overflow: auto; padding: 18px; display: grid; gap: 10px; box-sizing: border-box; }
 .rs-dialog h3 { margin: 0; font-family: var(--font-brand); font-size: 18px; }
 .rs-dialog textarea { width: 100%; box-sizing: border-box; min-height: 160px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 8px; font-family: var(--font-num); font-size: 11.5px; resize: vertical; }
+.rs-steps { margin: 0; padding-left: 20px; display: grid; gap: 3px; }
 .rs-err { color: var(--danger); font-size: 13px; margin: 0; }
 
 @media (max-width: 900px) {

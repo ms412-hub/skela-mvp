@@ -7,7 +7,8 @@ import { CATALOG, furnitureType } from './catalog.ts'
 import type { Plan, Wall } from './Plan.ts'
 import { planBounds, wallLength } from './Plan.ts'
 
-export type SceneBox = { kind: 'wall' | 'floor' | 'furniture'; id: string; cx: number; cy: number; cz: number; w: number; h: number; d: number; rotDeg: number; color: string }
+// opacity가 없으면 불투명(1). door는 문짝, glass는 창문 유리 (보기용이라 걷기 충돌에서 빠진다)
+export type SceneBox = { kind: 'wall' | 'floor' | 'furniture' | 'door' | 'glass'; id: string; cx: number; cy: number; cz: number; w: number; h: number; d: number; rotDeg: number; color: string; opacity?: number }
 
 const EPS = 0.01
 
@@ -63,6 +64,25 @@ export function floorBox(plan: Plan): SceneBox {
 
 export function buildBoxes(plan: Plan): SceneBox[] {
   return [floorBox(plan), ...plan.walls.flatMap((w) => wallBoxes(plan, w)), ...furnitureBoxes(plan)]
+}
+
+// 문짝과 창문 유리. id는 "door1:leaf", "window2:glass"
+export const DOOR_COLOR = '#9b7a55'
+export const GLASS_COLOR = '#9cc6dd'
+export function openingBoxes(plan: Plan): SceneBox[] {
+  const out: SceneBox[] = []
+  for (const o of plan.openings) {
+    const w = plan.walls.find((q) => q.id === o.wallId)
+    if (!w) continue
+    const len = wallLength(w)
+    if (len < EPS) continue
+    const ux = (w.b.x - w.a.x) / len, uy = (w.b.y - w.a.y) / len
+    const ang = (Math.atan2(uy, ux) * 180) / Math.PI
+    const base = { cx: w.a.x + ux * o.t * len, cz: w.a.y + uy * o.t * len, cy: o.sill + o.height / 2, w: o.width - 4, h: o.height - 2, rotDeg: ang }
+    if (o.kind === 'door') out.push({ kind: 'door', id: `${o.id}:leaf`, ...base, d: 4, color: DOOR_COLOR })
+    else out.push({ kind: 'glass', id: `${o.id}:glass`, ...base, d: 1.5, color: GLASS_COLOR, opacity: 0.35 })
+  }
+  return out
 }
 
 export { CATALOG }

@@ -17,7 +17,8 @@ import { createHistory } from '../../undoManager.ts'
 import type { Furniture, Opening, Plan, Vec, Wall } from '../Plan.ts'
 import * as P from '../Plan.ts'
 import { CATALOG, furnitureType } from '../catalog.ts'
-import { buildBoxes } from '../geometry.ts'
+import { buildBoxes, openingBoxes } from '../geometry.ts'
+import { toUnityScene, walkStart } from '../unityExport.ts'
 import { TEMPLATES, findTemplate } from '../templates.ts'
 import './studio.css'
 
@@ -88,6 +89,7 @@ root.innerHTML = `
         ${TEMPLATES.map((t) => `<option value="${t.id}">${t.name} · ${t.desc}</option>`).join('')}
       </select>
       <button class="rs-btn" id="rs-file">저장 · 불러오기</button>
+      <button class="rs-btn primary" id="rs-unity">유니티로 보내기</button>
     </div>
   </header>
   <aside class="rs-left">
@@ -245,21 +247,15 @@ function rebuild() {
     }
     world.add(mesh)
   }
-  // 문짝과 창문 유리 (보기용, 계산 규칙에는 없음)
-  for (const o of plan.openings) {
-    const w = plan.walls.find((q) => q.id === o.wallId)
-    if (!w) continue
-    const len = P.wallLength(w)
-    const ux = (w.b.x - w.a.x) / len, uy = (w.b.y - w.a.y) / len
-    const px = w.a.x + ux * o.t * len, pz = w.a.y + uy * o.t * len
-    const door = o.kind === 'door'
-    const mat = door
-      ? new THREE.MeshStandardMaterial({ color: '#9b7a55', roughness: 0.6 })
-      : new THREE.MeshStandardMaterial({ color: '#9cc6dd', roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.35 })
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(o.width - 4, o.height - 2, door ? 4 : 1.5), mat)
-    mesh.position.set(px, o.sill + o.height / 2, pz)
-    mesh.rotation.y = -Math.atan2(uy, ux)
-    mesh.userData.ref = { kind: 'opening', id: o.id } satisfies Ref
+  // 문짝과 창문 유리 (보기용, 유니티 내보내기와 같은 계산)
+  for (const box of openingBoxes(plan)) {
+    const glass = (box.opacity ?? 1) < 1
+    const mat = new THREE.MeshStandardMaterial({ color: box.color, roughness: glass ? 0.1 : 0.6, metalness: glass ? 0.1 : 0, transparent: glass, opacity: box.opacity ?? 1 })
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(box.w, box.h, box.d), mat)
+    mesh.position.set(box.cx, box.cy, box.cz)
+    mesh.rotation.y = -THREE.MathUtils.degToRad(box.rotDeg)
+    mesh.castShadow = !glass
+    mesh.userData.ref = { kind: 'opening', id: box.id.split(':')[0] } satisfies Ref
     world.add(mesh)
   }
   // 그림자 범위를 방 크기에 맞춘다
@@ -363,11 +359,10 @@ function setView(v: View) {
   padEl.hidden = v !== 'walk'
   if (v === 'walk') {
     if (tool !== 'select') setTool('select')
-    const b = P.planBounds(plan)
-    const start = findWalkStart()
+    const start = walkStart(plan)
     persp.position.set(start.x, EYE, start.y)
     // 방 가운데를 바라보며 시작
-    yaw = Math.atan2(-((b.x0 + b.x1) / 2 - start.x), -((b.y0 + b.y1) / 2 - start.y))
+    yaw = Math.atan2(-(start.lookX - start.x), -(start.lookY - start.y))
     pitch = -0.08
     applyLook()
     for (const f of wallFades) (f.mesh.material as THREE.MeshStandardMaterial).opacity = 1
@@ -378,22 +373,6 @@ function setView(v: View) {
   renderPanels()
 }
 function applyLook() { persp.rotation.set(pitch, yaw, 0, 'YXZ') }
-
-// 걷기 시작 위치: 문 안쪽, 없으면 방 가운데
-function findWalkStart(): Vec {
-  const b = P.planBounds(plan)
-  const center = { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 }
-  const door = plan.openings.find((o) => o.kind === 'door')
-  const w = door && plan.walls.find((q) => q.id === door.wallId)
-  if (door && w) {
-    const len = P.wallLength(w)
-    const p = { x: w.a.x + (w.b.x - w.a.x) * door.t, y: w.a.y + (w.b.y - w.a.y) * door.t }
-    const nx = -(w.b.y - w.a.y) / len, ny = (w.b.x - w.a.x) / len
-    const side = Math.sign((center.x - p.x) * nx + (center.y - p.y) * ny) || 1
-    return { x: p.x + nx * side * 70, y: p.y + ny * side * 70 }
-  }
-  return center
-}
 
 function blocked(x: number, z: number): boolean {
   const R = 22
@@ -812,6 +791,7 @@ root.addEventListener('click', (e) => {
   else if (t.id === 'rs-redo') redo()
   else if (t.id === 'rs-fit') fit()
   else if (t.id === 'rs-file') openFile()
+  else if (t.id === 'rs-unity') openUnity()
 })
 $('rs-right').addEventListener('change', (e) => {
   const t = e.target as HTMLInputElement
@@ -900,6 +880,40 @@ function openFile() {
   })
   m.addEventListener('keydown', (e) => { if (e.key === 'Escape') close() })
   ta.focus()
+}
+
+/* ───── 유니티로 보내기 ───── */
+function openUnity() {
+  const scene = toUnityScene(plan)
+  const text = JSON.stringify(scene)
+  const m = document.createElement('div')
+  m.className = 'rs-modal'
+  m.innerHTML = `<div class="rs-dialog" role="dialog" aria-modal="true" aria-labelledby="rs-unity-title">
+    <h3 id="rs-unity-title">유니티로 보내기</h3>
+    <p class="rs-note">'${esc(plan.name)}'을(를) 유니티에서 열 수 있게 만들었어요. 상자 ${scene.boxes.length}개, 가구 ${plan.furniture.length}개.</p>
+    <ol class="rs-note rs-steps">
+      <li>아래 <b>복사</b>를 눌러요.</li>
+      <li>유니티 위 메뉴에서 <b>Skela → 방 불러오기</b>를 열어요.</li>
+      <li><b>클립보드에서 붙여넣기</b>를 누르고 <b>방 만들기</b>를 눌러요.</li>
+      <li>▶ Play를 누르고 <b>1</b> 둘러보기 · <b>2</b> 걷기 · <b>3</b> 위에서 보기 키로 바꿔봐요.</li>
+    </ol>
+    <textarea id="rs-ujson" spellcheck="false" readonly>${esc(text)}</textarea>
+    <div class="rs-row">
+      <button class="rs-btn primary" id="rs-ucopy">복사</button>
+      <span class="rs-spacer"></span>
+      <button class="rs-btn" id="rs-uclose">닫기</button>
+    </div>
+  </div>`
+  document.body.appendChild(m)
+  const ta = m.querySelector('#rs-ujson') as HTMLTextAreaElement
+  const close = () => m.remove()
+  m.addEventListener('click', (e) => { if (e.target === m) close() })
+  m.addEventListener('keydown', (e) => { if (e.key === 'Escape') close() })
+  m.querySelector('#rs-uclose')?.addEventListener('click', close)
+  m.querySelector('#rs-ucopy')?.addEventListener('click', () => {
+    navigator.clipboard.writeText(text).then(() => toast('복사했어요. 유니티에서 붙여넣으세요.'), () => { ta.focus(); ta.select(); toast('선택해 두었어요. Ctrl+C로 복사하세요.') })
+  })
+  ;(m.querySelector('#rs-ucopy') as HTMLButtonElement).focus()
 }
 
 /* ───── 그리기 반복 ───── */
