@@ -92,6 +92,37 @@ export const CATALOG: FurnitureType[] = [
     { x: 0, z: 0, y: 10, w: 150, d: 65, h: 0.5, color: '#cfe3ea' },
   ] },
   { id: 'tile', name: '욕실 타일', w: 200, d: 200, h: 1, color: '#d4d9db', boxes: [{ x: 0, z: 0, y: 0, w: 200, d: 200, h: 1 }] },
+  // 주방 살림: 상부장은 벽에 거는 장(바닥에서 150cm 위), 펜던트는 천장에 매달린 조명
+  { id: 'upper', name: '상부장', w: 240, d: 35, h: 220, color: '#e8e3d9', boxes: [
+    { x: 0, z: 0, y: 150, w: 240, d: 35, h: 70 },
+    { x: -60, z: 17, y: 152, w: 1, d: 1, h: 66, color: '#bdb3a2' },
+    { x: 0, z: 17, y: 152, w: 1, d: 1, h: 66, color: '#bdb3a2' },
+    { x: 60, z: 17, y: 152, w: 1, d: 1, h: 66, color: '#bdb3a2' },
+  ] },
+  { id: 'island', name: '아일랜드', w: 180, d: 90, h: 92, color: '#4a5d54', boxes: [
+    { x: 0, z: -5, y: 0, w: 170, d: 70, h: 87 },
+    { x: 0, z: 0, y: 87, w: 180, d: 90, h: 5, color: '#ebe7df' },
+  ] },
+  { id: 'stool', name: '바 의자', w: 40, d: 40, h: 75, color: '#8a6a4a', boxes: [
+    { x: 0, z: 0, y: 0, w: 36, d: 36, h: 2, color: '#3a3a3a' },
+    { x: 0, z: 0, y: 2, w: 6, d: 6, h: 68, color: '#3a3a3a' },
+    { x: 0, z: 0, y: 70, w: 40, d: 40, h: 5 },
+  ] },
+  { id: 'tallcab', name: '키큰장 (오븐)', w: 60, d: 60, h: 220, color: '#d9d4ca', boxes: [
+    { x: 0, z: 0, y: 0, w: 60, d: 60, h: 220 },
+    { x: 0, z: 29.5, y: 60, w: 54, d: 1, h: 55, color: '#2b2d2f' },
+    { x: 0, z: 29.5, y: 125, w: 54, d: 1, h: 35, color: '#2b2d2f' },
+  ] },
+  { id: 'pendant', name: '펜던트 조명', w: 30, d: 30, h: 250, color: '#2f3a35', boxes: [
+    { x: 0, z: 0, y: 175, w: 1, d: 1, h: 75, color: '#444444' },
+    { x: 0, z: 0, y: 160, w: 30, d: 30, h: 15 },
+    { x: 0, z: 0, y: 158, w: 12, d: 12, h: 2, color: '#fff4d6' },
+  ] },
+  { id: 'plant', name: '화분', w: 45, d: 45, h: 120, color: '#5f8a4f', boxes: [
+    { x: 0, z: 0, y: 0, w: 34, d: 34, h: 35, color: '#b5764c' },
+    { x: 0, z: 0, y: 35, w: 45, d: 45, h: 60 },
+    { x: 0, z: 0, y: 95, w: 30, d: 30, h: 25, color: '#6f9c5c' },
+  ] },
   { id: 'floortile', name: '바닥 타일', w: 300, d: 300, h: 1, color: '#d3cdc1', boxes: [{ x: 0, z: 0, y: 0, w: 300, d: 300, h: 1 }] },
   { id: 'rug', name: '러그', w: 200, d: 140, h: 2, color: '#a85a5a', boxes: [{ x: 0, z: 0, y: 0, w: 200, d: 140, h: 2 }] },
 ]

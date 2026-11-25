@@ -89,6 +89,10 @@ test('복도형 64평: 가운데 거실·주방, 복도 끝 가장 큰 안방, �
   assert.equal(p.furniture.filter((f) => f.type === 'bed').length, 5)
   assert.equal(p.furniture.filter((f) => f.type === 'toilet').length, 3)
   assert.equal(p.openings[0].wallId, 'wall4', '현관이 첫 문')
+  // 주방 살림: 조리대 2, 상부장, 키큰장 3, 아일랜드 + 바 의자 2, 6인 식탁, 펜던트 3
+  const kitchen = p.furniture.filter((f) => f.x > 550 && f.x < 1400 && f.y > 561)
+  const count = (t: string) => kitchen.filter((f) => f.type === t).length
+  assert.deepEqual([count('counter'), count('upper'), count('tallcab'), count('island'), count('stool'), count('chair'), count('pendant')], [2, 1, 3, 1, 2, 6, 3])
   // 거실(TV)과 주방(조리대)은 집 가운데 (x 550~1400)
   for (const t of ['tv', 'counter', 'dining']) { const f = p.furniture.find((q) => q.type === t)!; assert.ok(f.x > 550 && f.x < 1400, t) }
   // 안방(1760~2200)이 가장 크고, 둘째 방(0~550 위쪽)이 그다음. 둘 다 안에 변기가 있다
