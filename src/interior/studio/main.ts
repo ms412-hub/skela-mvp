@@ -26,7 +26,9 @@ type Sel = { kind: 'furniture' | 'wall' | 'opening'; id: string } | null
 type Tool = 'select' | 'wall' | 'door' | 'window'
 type View = 'plan' | '3d' | 'walk'
 
-const STORE_KEY = 'skela-room-plan'
+// 페이지가 window.__SKELA_START = '템플릿 id'를 주면 그 템플릿으로 시작한다 (예: 60평 전용 페이지)
+const START_ID = (window as unknown as { __SKELA_START?: string }).__SKELA_START
+const STORE_KEY = 'skela-room-plan' + (START_ID ? `-${START_ID}` : '')
 const GRID = 10 // 벽 그리기 격자 (cm)
 const MOVE_SNAP = 5 // 가구 이동 격자 (cm)
 const EYE = 160 // 걷기 눈높이 (cm)
@@ -39,7 +41,7 @@ function loadSaved(): Plan | null {
     return raw ? P.fromPlanFile(JSON.parse(raw)) : null
   } catch { return null }
 }
-let plan: Plan = loadSaved() ?? TEMPLATES[0].build()
+let plan: Plan = loadSaved() ?? (findTemplate(START_ID ?? '') ?? TEMPLATES[0]).build()
 const hist = createHistory<Plan>(plan)
 let sel: Sel = null
 let tool: Tool = 'select'
