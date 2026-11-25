@@ -79,3 +79,27 @@ test('복도형 아파트: 약 60평, 현관에서 거실까지 복도가 비어
     assert.ok(!inHall, `${f.id}(${f.type})가 복도를 막는다`)
   }
 })
+
+test('복도형 64평: 가운데 거실·주방, 복도 끝 가장 큰 안방, 큰 방 두 곳에 욕실', async () => {
+  const { planBounds, pointInFurniture } = await import('../src/interior/Plan.ts')
+  const p = TEMPLATES.find((t) => t.id === 'corridor64')!.build()
+  const b = planBounds(p)
+  const pyeong = ((b.x1 - b.x0) * (b.y1 - b.y0)) / 10000 / 3.3058
+  assert.ok(Math.abs(pyeong - 64) < 0.5, `평수 ${pyeong}`)
+  assert.equal(p.furniture.filter((f) => f.type === 'bed').length, 5)
+  assert.equal(p.furniture.filter((f) => f.type === 'toilet').length, 3)
+  assert.equal(p.openings[0].wallId, 'wall4', '현관이 첫 문')
+  // 거실(TV)과 주방(조리대)은 집 가운데 (x 550~1400)
+  for (const t of ['tv', 'counter', 'dining']) { const f = p.furniture.find((q) => q.type === t)!; assert.ok(f.x > 550 && f.x < 1400, t) }
+  // 안방(1760~2200)이 가장 크고, 둘째 방(0~550 위쪽)이 그다음. 둘 다 안에 변기가 있다
+  const rooms = { master: 440 * 962, second: 550 * 401, r3: 330 * 401, r4: 360 * 401, r5: 360 * 401 }
+  assert.ok(rooms.master > rooms.second && rooms.second > Math.max(rooms.r3, rooms.r4, rooms.r5))
+  const toilets = p.furniture.filter((f) => f.type === 'toilet')
+  assert.ok(toilets.some((t) => t.x > 1760), '안방 욕실')
+  assert.ok(toilets.some((t) => t.x < 550 && t.y < 401), '둘째 방 욕실')
+  // 복도(현관 쪽 x<550, 안방 쪽 1400~1760, y 406~556)에는 가구가 없다
+  for (const f of p.furniture) for (let x = 5; x < 1760; x += 10) {
+    if (x > 550 && x < 1400) continue
+    for (const y of [410, 481, 550]) assert.ok(!pointInFurniture(f, { x, y }), `${f.id}(${f.type})가 복도를 막는다`)
+  }
+})
