@@ -35,7 +35,7 @@ test('유니티 장면: JSON으로 바꿔도 그대로이고 형식 표시가 �
 })
 
 test('걷기 시작점: 문 안쪽에서 방 가운데를 본다', () => {
-  const p = TEMPLATES[2].build() // 빈 방 5×4m, 아래 벽(y=400)에 문
+  const p = TEMPLATES.find((t) => t.id === 'empty')!.build() // 빈 방 5×4m, 아래 벽(y=400)에 문
   const s = walkStart(p)
   assert.ok(s.y < 400 && s.y > 300, `문 안쪽이어야 함: ${s.y}`)
   assert.equal(s.lookX, 250)

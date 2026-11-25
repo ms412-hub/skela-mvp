@@ -33,3 +33,11 @@ test('방 범위는 돌린 가구의 실제 차지 영역으로 잰다', async (
   assert.equal(b.x1, 600)
   assert.equal(b.y1, 450)
 })
+
+test('쓰리룸 아파트: 문 4개, 창문 5개가 모두 들어간다 (겹쳐서 빠진 것 없음)', () => {
+  const p = TEMPLATES.find((t) => t.id === 'apartment')!.build()
+  assert.equal(p.openings.filter((o) => o.kind === 'door').length, 4)
+  assert.equal(p.openings.filter((o) => o.kind === 'window').length, 5)
+  assert.equal(p.walls.length, 8)
+  assert.ok(p.furniture.length >= 25)
+})

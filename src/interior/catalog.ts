@@ -54,6 +54,23 @@ export const CATALOG: FurnitureType[] = [
     { x: 0, z: 0, y: 40, w: 90, d: 50, h: 5 },
     leg(-40, -20, 40), leg(40, -20, 40), leg(-40, 20, 40), leg(40, 20, 40),
   ] },
+  // 앞면은 +z (옷장 손잡이, 의자 앉는 쪽과 같음). 벽에 붙일 때 뒷면(-z)이 벽을 보게 돌린다
+  { id: 'counter', name: '주방 조리대', w: 240, d: 60, h: 90, color: '#d9d4ca', boxes: [
+    { x: 0, z: 0, y: 0, w: 240, d: 60, h: 85 },
+    { x: 0, z: 0, y: 85, w: 240, d: 60, h: 5, color: '#3d4043' },
+    { x: -50, z: 4, y: 89.6, w: 56, d: 38, h: 0.4, color: '#a7b0b5' },
+    { x: 60, z: 6, y: 89.6, w: 60, d: 45, h: 0.4, color: '#1f2224' },
+  ] },
+  { id: 'fridge', name: '냉장고', w: 90, d: 75, h: 180, color: '#dfe3e6', boxes: [
+    { x: 0, z: -1.5, y: 0, w: 90, d: 72, h: 180 },
+    { x: -2, z: 36, y: 70, w: 2, d: 3, h: 60, color: '#9aa1a6' },
+    { x: 2, z: 36, y: 70, w: 2, d: 3, h: 60, color: '#9aa1a6' },
+  ] },
+  { id: 'tv', name: 'TV장', w: 180, d: 40, h: 127, color: '#6e5a45', boxes: [
+    { x: 0, z: 0, y: 0, w: 180, d: 40, h: 45 },
+    { x: 0, z: -8, y: 45, w: 30, d: 15, h: 2, color: '#2a2c2f' },
+    { x: 0, z: -8, y: 47, w: 140, d: 5, h: 80, color: '#1d1f22' },
+  ] },
   { id: 'rug', name: '러그', w: 200, d: 140, h: 2, color: '#a85a5a', boxes: [{ x: 0, z: 0, y: 0, w: 200, d: 140, h: 2 }] },
 ]
 
