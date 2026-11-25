@@ -42,14 +42,14 @@ test('쓰리룸 아파트: 문 4개, 창문 5개가 모두 들어간다 (겹쳐�
   assert.ok(p.furniture.length >= 25)
 })
 
-test('5룸 대형 아파트: 약 60평, 문 8개(현관·화장실 포함), 창문 8개, 방 5개, 화장실 2개', async () => {
+test('5룸 대형 아파트: 약 60평, 문 7개(현관·안방 욕실 포함), 창문 8개, 방 5개, 욕실 1개', async () => {
   const { planBounds } = await import('../src/interior/Plan.ts')
   const p = TEMPLATES.find((t) => t.id === 'fiveroom')!.build()
   const b = planBounds(p)
   const pyeong = ((b.x1 - b.x0) * (b.y1 - b.y0)) / 10000 / 3.3058
   assert.ok(Math.abs(pyeong - 60) < 0.5, `평수 ${pyeong}`)
-  assert.equal(p.openings.filter((o) => o.kind === 'door').length, 8)
-  for (const k of ['toilet', 'basin', 'bathtub', 'tile']) assert.equal(p.furniture.filter((f) => f.type === k).length, 2, k)
+  assert.equal(p.openings.filter((o) => o.kind === 'door').length, 7)
+  for (const k of ['toilet', 'basin', 'bathtub', 'tile']) assert.equal(p.furniture.filter((f) => f.type === k).length, 1, k)
   assert.equal(p.openings.filter((o) => o.kind === 'window').length, 8)
   assert.equal(p.furniture.filter((f) => f.type === 'bed').length, 5)
   assert.equal(p.openings[0].wallId, 'wall3', '현관이 첫 문이어야 걷기가 현관에서 시작한다')
