@@ -71,6 +71,27 @@ export const CATALOG: FurnitureType[] = [
     { x: 0, z: -8, y: 45, w: 30, d: 15, h: 2, color: '#2a2c2f' },
     { x: 0, z: -8, y: 47, w: 140, d: 5, h: 80, color: '#1d1f22' },
   ] },
+  // 욕실: 변기·세면대는 뒷면(-z)이 벽을 본다. 욕실 타일은 바닥에 까는 얇은 판(러그처럼)
+  { id: 'toilet', name: '변기', w: 40, d: 68, h: 78, color: '#f5f5f3', boxes: [
+    { x: 0, z: 8, y: 0, w: 36, d: 48, h: 40 },
+    { x: 0, z: 8, y: 40, w: 38, d: 46, h: 3, color: '#e6e6e3' },
+    { x: 0, z: -26, y: 30, w: 40, d: 16, h: 48 },
+  ] },
+  { id: 'basin', name: '세면대', w: 60, d: 45, h: 160, color: '#f5f5f3', boxes: [
+    { x: 0, z: 0, y: 0, w: 60, d: 45, h: 80, color: '#cfc6b8' },
+    { x: 0, z: 0, y: 80, w: 60, d: 45, h: 5 },
+    { x: 0, z: 3, y: 84.6, w: 40, d: 30, h: 0.4, color: '#c9d3d8' },
+    { x: 0, z: -21.5, y: 100, w: 50, d: 2, h: 60, color: '#bcd2dc' },
+  ] },
+  { id: 'bathtub', name: '욕조', w: 160, d: 75, h: 55, color: '#f3f3f1', boxes: [
+    { x: 0, z: 0, y: 0, w: 160, d: 75, h: 10 },
+    { x: -77.5, z: 0, y: 10, w: 5, d: 75, h: 45 },
+    { x: 77.5, z: 0, y: 10, w: 5, d: 75, h: 45 },
+    { x: 0, z: -35, y: 10, w: 150, d: 5, h: 45 },
+    { x: 0, z: 35, y: 10, w: 150, d: 5, h: 45 },
+    { x: 0, z: 0, y: 10, w: 150, d: 65, h: 0.5, color: '#cfe3ea' },
+  ] },
+  { id: 'tile', name: '욕실 타일', w: 200, d: 200, h: 1, color: '#d4d9db', boxes: [{ x: 0, z: 0, y: 0, w: 200, d: 200, h: 1 }] },
   { id: 'rug', name: '러그', w: 200, d: 140, h: 2, color: '#a85a5a', boxes: [{ x: 0, z: 0, y: 0, w: 200, d: 140, h: 2 }] },
 ]
 

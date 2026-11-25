@@ -15,12 +15,13 @@ function rect(plan: Plan, x0: number, y0: number, x1: number, y1: number): Plan 
   return p
 }
 
-function put(plan: Plan, type: string, x: number, y: number, rot = 0): Plan {
+// size를 주면 가로·깊이를 바꾼다 (욕실 타일을 방 크기에 맞출 때)
+function put(plan: Plan, type: string, x: number, y: number, rot = 0, size?: { w: number; d: number }): Plan {
   const t = furnitureType(type)
   if (!t) return plan
   const p = addFurniture(plan, type, x, y, t)
   const id = p.furniture[p.furniture.length - 1].id
-  return rot ? updateFurniture(p, id, { rot }) : p
+  return rot || size ? updateFurniture(p, id, { rot, ...size }) : p
 }
 
 export const TEMPLATES: RoomTemplate[] = [
@@ -118,7 +119,7 @@ export const TEMPLATES: RoomTemplate[] = [
     },
   },
   {
-    id: 'fiveroom', name: '5룸 대형 아파트', desc: '16 × 12.4 m · 방 5, 거실, 주방 · 약 60평',
+    id: 'fiveroom', name: '5룸 대형 아파트', desc: '16 × 12.4 m · 방 5, 화장실 2, 거실, 주방 · 약 60평',
     build: () => {
       let p = { ...emptyPlan(), name: '5룸 대형 아파트 (60평)', floorColor: '#a7835f' }
       p = rect(p, 0, 0, 1600, 1240) // 198.4 m² ≈ 60평. wall1 위, wall2 오른쪽, wall3 아래, wall4 왼쪽
@@ -127,13 +128,20 @@ export const TEMPLATES: RoomTemplate[] = [
       p = addWall(p, { x: 1100, y: 0 }, { x: 1100, y: 1240 }) // wall7: 거실·주방 | 오른쪽 방들
       p = addWall(p, { x: 1100, y: 420 }, { x: 1600, y: 420 }) // wall8: 방3 | 방4
       p = addWall(p, { x: 1100, y: 830 }, { x: 1600, y: 830 }) // wall9: 방4 | 방5
+      p = addWall(p, { x: 220, y: 400 }, { x: 220, y: 620 }) // wall10: 안방 욕실 오른쪽
+      p = addWall(p, { x: 0, y: 400 }, { x: 220, y: 400 }) // wall11: 안방 욕실 위
+      p = addWall(p, { x: 500, y: 700 }, { x: 720, y: 700 }) // wall12: 공용 화장실 위
+      p = addWall(p, { x: 720, y: 700 }, { x: 720, y: 960 }) // wall13: 공용 화장실 오른쪽
+      p = addWall(p, { x: 500, y: 960 }, { x: 720, y: 960 }) // wall14: 공용 화장실 아래
       // 문 (현관을 먼저 넣어야 걷기가 현관에서 시작한다)
       p = addOpening(p, 'wall3', 0.5, 'door') // 현관 (x=800)
       p = addOpening(p, 'wall5', 540 / 1240, 'door') // 방1
-      p = addOpening(p, 'wall5', 700 / 1240, 'door') // 방2
+      p = addOpening(p, 'wall5', 1000 / 1240, 'door') // 방2 (공용 화장실 아래쪽으로 나온다)
       p = addOpening(p, 'wall7', 330 / 1240, 'door') // 방3
       p = addOpening(p, 'wall7', 520 / 1240, 'door') // 방4
       p = addOpening(p, 'wall7', 930 / 1240, 'door') // 방5
+      p = addOpening(p, 'wall10', 0.5, 'door') // 안방 욕실
+      p = addOpening(p, 'wall13', 0.5, 'door') // 공용 화장실 (주방 쪽)
       // 창문
       p = addOpening(p, 'wall1', 250 / 1600, 'window') // 방1
       p = addOpening(p, 'wall1', 600 / 1600, 'window') // 거실
@@ -147,10 +155,15 @@ export const TEMPLATES: RoomTemplate[] = [
       p = put(p, 'bed', 250, 120)
       p = put(p, 'wardrobe', 467, 150, 90)
       p = put(p, 'wardrobe', 467, 270, 90)
-      p = put(p, 'desk', 110, 580)
-      p = put(p, 'chair', 110, 525)
-      p = put(p, 'rug', 250, 380)
-      p = put(p, 'bookshelf', 20, 400, 270)
+      p = put(p, 'desk', 340, 580)
+      p = put(p, 'chair', 340, 525)
+      p = put(p, 'rug', 250, 330)
+      p = put(p, 'bookshelf', 20, 300, 270)
+      // 안방 욕실 (0~220, 400~620)
+      p = put(p, 'tile', 110, 510, 0, { w: 210, d: 210 })
+      p = put(p, 'toilet', 38, 460, 270)
+      p = put(p, 'basin', 150, 428)
+      p = put(p, 'bathtub', 110, 578)
       // 방2 (0~500, 620~1240)
       p = put(p, 'bed', 110, 745)
       p = put(p, 'wardrobe', 330, 655)
@@ -166,11 +179,16 @@ export const TEMPLATES: RoomTemplate[] = [
       // 주방·식당 (500~1100, 700~1240)
       p = put(p, 'counter', 970, 1205, 180)
       p = put(p, 'fridge', 555, 1197, 180)
-      p = put(p, 'dining', 800, 900)
-      p = put(p, 'chair', 770, 835)
-      p = put(p, 'chair', 830, 835)
-      p = put(p, 'chair', 770, 965, 180)
-      p = put(p, 'chair', 830, 965, 180)
+      p = put(p, 'dining', 870, 900)
+      p = put(p, 'chair', 840, 835)
+      p = put(p, 'chair', 900, 835)
+      p = put(p, 'chair', 840, 965, 180)
+      p = put(p, 'chair', 900, 965, 180)
+      // 공용 화장실 (500~720, 700~960)
+      p = put(p, 'tile', 610, 830, 0, { w: 210, d: 250 })
+      p = put(p, 'toilet', 538, 760, 270)
+      p = put(p, 'basin', 640, 728)
+      p = put(p, 'bathtub', 610, 918)
       // 방3 (1100~1600, 0~420)
       p = put(p, 'bed', 1350, 120)
       p = put(p, 'desk', 1500, 385)
