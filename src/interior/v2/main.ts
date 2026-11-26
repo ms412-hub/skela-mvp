@@ -390,7 +390,7 @@ function frameRect(c: VCamera, W: number, H: number) {
 let camDraft: VCamera | null = null
 function updateCamHelpers() {
   disposeGroup(helpers)
-  if (stack || view === 'cam') return
+  if (stack || view === 'cam' || view === 'walk') return // 걷기에서는 아이콘이 눈앞을 가리므로 숨긴다
   const accent = new THREE.Color(cssVar('--accent'))
   for (const c0 of project.cameras) {
     const c = camDraft && camDraft.id === c0.id ? camDraft : c0
@@ -843,7 +843,7 @@ function renderInspector() {
       <p class="rs-note">3D·평면 화면에서 <b>카메라 몸통</b>을 끌면 자리가, <b>작은 공</b>을 끌면 보는 곳이 바뀌어요.</p>
       <div class="rs-row">
         <button class="rs-btn primary" data-act="camlook">카메라로 보기</button>
-        <button class="rs-btn" data-act="camgrab" ${view === '3d' ? '' : 'disabled title="3D 보기에서 쓸 수 있어요"'}>현재 시점으로 덮어쓰기</button>
+        <button class="rs-btn" data-act="camgrab" ${view === 'cam' ? 'disabled title="3D·평면·걷기 보기에서 쓸 수 있어요"' : ''}>현재 시점으로 덮어쓰기</button>
         <button class="rs-btn" data-act="camfit">방에 다시 맞추기</button>
       </div>
     </section>
@@ -944,7 +944,8 @@ function newCamera(kind: Preset | 'current') {
   const room = P.planBounds(plan)
   let cam: VCamera
   if (kind === 'current') {
-    cam = makeCamera('interior', id, `카메라 ${n}`, project.currentFloorId, room, '16:9')
+    const preset: Preset = view === 'plan' ? 'top' : view === 'walk' ? 'fps' : 'interior'
+    cam = makeCamera(preset, id, `카메라 ${n}`, project.currentFloorId, room, '16:9')
     grabCurrentView(cam)
   } else {
     cam = makeCamera(kind, id, `${PRESETS[kind].label} ${n}`, project.currentFloorId, room, '16:9', 250, walkStart(plan))
@@ -954,8 +955,42 @@ function newCamera(kind: Preset | 'current') {
   commitProject(next)
   select({ kind: 'camera', id })
 }
-// 편집 3D 화면의 시점을 카메라에 복사 (원근 카메라가 된다. 직교면 같은 크기가 보이게 세로 길이를 맞춤)
+// 카메라를 고르면 그 카메라가 있는 층으로 간다 (다른 층에 있으면 아이콘·미리보기가 안 보이므로)
+function goToCameraFloor(id: string) {
+  const c = camById(id)
+  if (!c) return
+  if (view === 'cam') setView('3d')
+  if (stack || c.floorId !== project.currentFloorId) {
+    stack = false
+    project = PR.selectFloor(project, c.floorId)
+    syncPlan(); endWall()
+    rebuild(); fit()
+    toast(`${floorName(c.floorId)}로 이동했어요.`)
+  }
+}
+// 지금 편집 화면의 시점을 카메라에 복사. 3D·걷기는 원근, 평면은 바로 위에서 보는 직교 카메라가 된다
 function grabCurrentView(c: VCamera) {
+  if (view === 'plan') {
+    const t = orbitPlan.target
+    c.projection = 'orthographic'
+    c.target = { x: Math.round(t.x), y: Math.round(t.z), h: 0 }
+    c.pos = { x: c.target.x, y: c.target.y, h: 5000 }
+    c.orthoSpan = Math.max(50, Math.round((ortho.top - ortho.bottom) / ortho.zoom))
+    return
+  }
+  if (view === 'walk') {
+    const p = persp.position, f = persp.getWorldDirection(new THREE.Vector3())
+    c.projection = 'perspective'
+    c.pos = { x: Math.round(p.x), y: Math.round(p.z), h: Math.round(p.y) }
+    c.target = { x: Math.round(p.x + f.x * 300), y: Math.round(p.z + f.z * 300), h: Math.round(p.y + f.y * 300) }
+    c.fovDeg = Math.round(persp.fov)
+    return
+  }
+  if (view === 'cam' && camView) {
+    const v = camById(camView)
+    if (v) { c.projection = v.projection; c.pos = { ...v.pos }; c.target = { ...v.target }; c.fovDeg = v.fovDeg; c.orthoSpan = v.orthoSpan; c.aspect = v.aspect }
+    return
+  }
   const t = orbit3d.target, p = persp.position
   c.pos = { x: Math.round(p.x), y: Math.round(p.z), h: Math.round(p.y) }
   c.target = { x: Math.round(t.x), y: Math.round(t.z), h: Math.round(t.y) }
@@ -973,7 +1008,7 @@ function act(a: string) {
     if (!c) return
     if (a === 'del') { sel = null; commitProject(PR.removeCamera(project, c.id)); return }
     if (a === 'camlook') { lookThrough(c.id); return }
-    if (a === 'camgrab') { const nc = { ...c, pos: { ...c.pos }, target: { ...c.target } }; grabCurrentView(nc); commitProject(PR.upsertCamera(project, nc)); toast('지금 3D 시점을 카메라에 담았어요.'); return }
+    if (a === 'camgrab') { const nc = { ...c, pos: { ...c.pos }, target: { ...c.target }, floorId: project.currentFloorId }; grabCurrentView(nc); commitProject(PR.upsertCamera(project, nc)); toast('지금 화면 시점을 카메라에 담았어요.'); return }
     if (a === 'camfit') {
       const fl = project.floors.find((f) => f.id === c.floorId)
       const room = P.planBounds(fl ? fl.plan : plan)
@@ -1091,7 +1126,12 @@ root.addEventListener('click', (e) => {
     sel = null
     commitProject(PR.removeFloor(project, d.floordel))
   }
-  else if (d.pick) { const [kind, id] = d.pick.split(':'); setTool('select'); select({ kind: kind as NonNullable<Sel>['kind'], id }) }
+  else if (d.pick) {
+    const [kind, id] = d.pick.split(':')
+    if (kind === 'camera') goToCameraFloor(id)
+    setTool('select')
+    select({ kind: kind as NonNullable<Sel>['kind'], id })
+  }
   else if (d.act) act(d.act)
   else if (t.id === 'rs-undo') undo()
   else if (t.id === 'rs-redo') redo()
@@ -1570,10 +1610,11 @@ function frame() {
       const ar = aspectRatio(pc.aspect)
       const pw = Math.min(W * 0.42, 280), ph = pw / ar
       const ph2 = Math.min(ph, H * 0.4), pw2 = ph2 * ar
-      Object.assign(previewEl.style, { width: `${pw2}px`, height: `${ph2}px` })
+      const px = view === 'walk' ? 12 : W - 12 - pw2 // 걷기에서는 이동 버튼과 겹치지 않게 왼쪽
+      Object.assign(previewEl.style, { width: `${pw2}px`, height: `${ph2}px`, left: `${px}px`, right: 'auto' })
       ;($('rs-preview-name') as HTMLElement).textContent = `미리보기 · ${pc.name}`
       {
-        const x = W - 12 - pw2, y = 52 // CSS 기준 오른쪽 아래 → WebGL은 아래에서 위
+        const x = px, y = 52 // CSS 기준 아래 → WebGL은 아래에서 위
         const fades = wallFades.map((f) => [f.mesh.visible, (f.mesh.material as THREE.MeshStandardMaterial).opacity] as const)
         setCutawayFor(pc)
         const gv = gizmoHelper.visible, grv = grid.visible
