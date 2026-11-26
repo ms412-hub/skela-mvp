@@ -386,11 +386,14 @@ function frameRect(c: VCamera, W: number, H: number) {
   return { x: (W - fw) / 2, y: (H - fh) / 2, w: fw, h: fh, scale: H / fh }
 }
 
+// 카메라를 끄는 중이면 아직 저장하지 않은 임시 카메라(camDraft)로 그린다
+let camDraft: VCamera | null = null
 function updateCamHelpers() {
   disposeGroup(helpers)
   if (stack || view === 'cam') return
   const accent = new THREE.Color(cssVar('--accent'))
-  for (const c of project.cameras) {
+  for (const c0 of project.cameras) {
+    const c = camDraft && camDraft.id === c0.id ? camDraft : c0
     if (c.floorId !== project.currentFloorId) continue
     const on = sel?.kind === 'camera' && sel.id === c.id
     // 직교 카메라는 아주 멀리 있으니 방 가까이(6m)에 아이콘만 그린다
@@ -410,8 +413,20 @@ function updateCamHelpers() {
       const dir = to.clone().sub(from).normalize()
       helpers.add(new THREE.ArrowHelper(dir, from, Math.min(from.distanceTo(to), 220), col.getHex(), 40, 26))
     }
-    const ball = new THREE.Mesh(new THREE.SphereGeometry(on ? 9 : 6, 12, 8), new THREE.MeshBasicMaterial({ color: on ? accent : 0x666666 }))
+    // 카메라 몸통: 눌러서 고르고, 끌어서 자리를 옮긴다
+    const body = new THREE.Mesh(new THREE.BoxGeometry(34, 24, 24), new THREE.MeshBasicMaterial({ color: on ? accent : 0x555555 }))
+    body.position.set(...toThree(near.pos))
+    body.lookAt(...toThree(c.target))
+    body.userData.camPick = { id: c.id, part: 'body' }
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(7, 9, 12, 16), new THREE.MeshBasicMaterial({ color: on ? accent : 0x333333 }))
+    lens.rotation.x = Math.PI / 2; lens.position.z = 16
+    lens.userData.camPick = { id: c.id, part: 'body' }
+    body.add(lens)
+    helpers.add(body)
+    // 보는 점: 끌어서 카메라가 바라보는 곳을 바꾼다
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(on ? 12 : 9, 16, 10), new THREE.MeshBasicMaterial({ color: on ? accent : 0x777777 }))
     ball.position.set(...toThree(c.target))
+    ball.userData.camPick = { id: c.id, part: 'target' }
     helpers.add(ball)
   }
 }
@@ -569,6 +584,30 @@ function showWallPreview(p: Vec | null, e?: PointerEvent) {
 let down: { x: number; y: number } | null = null
 let drag: { id: string; ox: number; oy: number; moved: boolean } | null = null
 let look: { x: number; y: number } | null = null
+let camDrag: { id: string; part: 'body' | 'target'; start: VCamera; moved: boolean } | null = null
+function pointAtHeight(e: PointerEvent, h: number): Vec | null {
+  setRay(e)
+  const v = new THREE.Vector3()
+  return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -h), v) ? { x: v.x, y: v.z } : null
+}
+// 끈 위치로 카메라 계산: 원근 카메라 몸통은 그 자리로, 직교 카메라 몸통은 보는 점을 중심으로 돈다. 보는 점을 끌면 직교 카메라는 통째로 옮겨진다
+function draggedCamera(c: VCamera, part: 'body' | 'target', g: Vec): VCamera {
+  const q = { x: P.snapTo(g.x, MOVE_SNAP), y: P.snapTo(g.y, MOVE_SNAP) }
+  const n: VCamera = { ...c, pos: { ...c.pos }, target: { ...c.target } }
+  if (part === 'target') {
+    const dx = q.x - c.target.x, dy = q.y - c.target.y
+    n.target.x = q.x; n.target.y = q.y
+    if (c.projection === 'orthographic') { n.pos.x += dx; n.pos.y += dy }
+  } else if (c.projection === 'perspective') {
+    n.pos.x = q.x; n.pos.y = q.y
+  } else {
+    const lh = Math.hypot(c.pos.x - c.target.x, c.pos.y - c.target.y) || 1
+    const ux = q.x - c.target.x, uy = q.y - c.target.y, ul = Math.hypot(ux, uy) || 1
+    n.pos.x = c.target.x + (ux / ul) * lh; n.pos.y = c.target.y + (uy / ul) * lh
+  }
+  if (Math.hypot(n.pos.x - n.target.x, n.pos.y - n.target.y, n.pos.h - n.target.h) < 20) return c // 너무 가까우면 그대로
+  return n
+}
 const editable = () => !stack && view !== 'cam'
 
 viewEl.addEventListener('pointerdown', (e) => {
@@ -576,6 +615,18 @@ viewEl.addEventListener('pointerdown', (e) => {
   down = { x: e.clientX, y: e.clientY }
   if (view === 'walk') { look = { x: e.clientX, y: e.clientY }; renderer.domElement.setPointerCapture(e.pointerId); return }
   if (!editable() || tool !== 'select' || e.button !== 0 || gizmo.axis !== null || gizmo.dragging) return
+  setRay(e)
+  const ch = ray.intersectObjects(helpers.children, true).find((h) => h.object.userData.camPick)
+  if (ch) {
+    const { id, part } = ch.object.userData.camPick as { id: string; part: 'body' | 'target' }
+    const c = camById(id)
+    if (!c) return
+    if (!(sel?.kind === 'camera' && sel.id === id)) select({ kind: 'camera', id })
+    camDrag = { id, part, start: c, moved: false }
+    activeOrbit().enabled = false
+    renderer.domElement.setPointerCapture(e.pointerId)
+    return
+  }
   const ref = pick(e)
   if (ref?.kind === 'furniture') {
     const f = plan.furniture.find((q) => q.id === ref.id)
@@ -599,6 +650,18 @@ viewEl.addEventListener('pointermove', (e) => {
     }
     return
   }
+  if (camDrag) {
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 3) camDrag.moved = true
+    if (!camDrag.moved) return
+    const c = camDrag.start
+    const L = Math.hypot(c.pos.x - c.target.x, c.pos.y - c.target.y, c.pos.h - c.target.h)
+    const h = camDrag.part === 'target' ? c.target.h : c.projection === 'orthographic' && L > 600 ? c.target.h + ((c.pos.h - c.target.h) / L) * 600 : c.pos.h
+    const g = pointAtHeight(e, h)
+    if (!g) return
+    camDraft = draggedCamera(c, camDrag.part, g)
+    updateCamHelpers()
+    return
+  }
   if (drag) {
     const g = groundPoint(e), grp = furnGroups.get(drag.id)
     if (!g || !grp) return
@@ -614,6 +677,22 @@ viewEl.addEventListener('pointermove', (e) => {
 viewEl.addEventListener('pointerup', (e) => {
   const wasClick = !!down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6
   down = null; look = null
+  if (camDrag) {
+    const d = camDrag
+    camDrag = null
+    activeOrbit().enabled = view !== 'walk'
+    const draft = camDraft
+    camDraft = null
+    if (d.moved && draft) {
+      // 직교 카메라를 돌렸으면 바뀐 방향에서 집이 꽉 차게 찍는 범위를 다시 맞춘다
+      const fl = project.floors.find((f) => f.id === draft.floorId)
+      const fixed = draft.projection === 'orthographic' && d.part === 'body' && fl ? { ...draft, orthoSpan: fitOrthoSpan(draft, P.planBounds(fl.plan)) } : draft
+      commitProject(PR.upsertCamera(project, fixed))
+      toast(d.part === 'body' ? '카메라 자리를 옮겼어요.' : '카메라가 보는 곳을 바꿨어요.')
+    }
+    else updateCamHelpers()
+    return
+  }
   if (drag) {
     const d = drag
     drag = null
@@ -757,8 +836,11 @@ function renderInspector() {
         ${c.projection === 'perspective' ? num('c-fov', '화각 (°)', c.fovDeg, 'min="20" max="100" step="5"') : num('c-span', '보이는 세로 (cm)', c.orthoSpan, 'min="50" step="50"')}
         <div class="rs-field"><label for="c-aspect">비율</label><select id="c-aspect">${ASPECTS.map((a) => opt(a, a, c.aspect)).join('')}</select></div>
         <div class="rs-field"><label for="c-cut">앞쪽 벽</label><select id="c-cut">${opt('auto', '자동 숨김', c.cutaway)}${opt('none', '그대로', c.cutaway)}</select></div>
+        ${num('c-x', '카메라 X', c.pos.x, 'step="10"')}${num('c-y', '카메라 Y', c.pos.y, 'step="10"')}
         ${num('c-h', '카메라 높이', c.pos.h, 'step="10"')}${num('c-th', '보는 점 높이', c.target.h, 'step="10"')}
+        ${num('c-tx', '보는 점 X', c.target.x, 'step="10"')}${num('c-ty', '보는 점 Y', c.target.y, 'step="10"')}
       </div>
+      <p class="rs-note">3D·평면 화면에서 <b>카메라 몸통</b>을 끌면 자리가, <b>작은 공</b>을 끌면 보는 곳이 바뀌어요.</p>
       <div class="rs-row">
         <button class="rs-btn primary" data-act="camlook">카메라로 보기</button>
         <button class="rs-btn" data-act="camgrab" ${view === '3d' ? '' : 'disabled title="3D 보기에서 쓸 수 있어요"'}>현재 시점으로 덮어쓰기</button>
@@ -950,6 +1032,10 @@ function onField(id: string, raw: string, checked: boolean) {
     if (id === 'c-span' && Number.isFinite(v)) nc.orthoSpan = Math.max(50, v)
     if (id === 'c-aspect') nc.aspect = raw as Aspect
     if (id === 'c-cut') nc.cutaway = raw === 'none' ? 'none' : 'auto'
+    if (id === 'c-x' && Number.isFinite(v)) nc.pos.x = v
+    if (id === 'c-y' && Number.isFinite(v)) nc.pos.y = v
+    if (id === 'c-tx' && Number.isFinite(v)) nc.target.x = v
+    if (id === 'c-ty' && Number.isFinite(v)) nc.target.y = v
     if (id === 'c-h' && Number.isFinite(v)) nc.pos.h = v
     if (id === 'c-th' && Number.isFinite(v)) nc.target.h = v
     if (id === 'c-fmt') { nc.output.format = raw as OutFormat; if (raw === 'jpg') nc.output.transparent = false }
@@ -1511,4 +1597,16 @@ setTool('select')
 fit()
 renderPanels()
 requestAnimationFrame(frame)
-;(window as unknown as { __room: unknown }).__room = { get project() { return project }, get plan() { return plan }, get sel() { return sel }, get view() { return view }, openExport, select, lookThrough }
+// 테스트용: 카메라 아이콘(몸통·공)의 화면 좌표
+function camScreen(id: string) {
+  const r = renderer.domElement.getBoundingClientRect()
+  const out: Record<string, { x: number; y: number }> = {}
+  helpers.children.forEach((o) => {
+    const pk = o.userData.camPick as { id: string; part: string } | undefined
+    if (!pk || pk.id !== id) return
+    const v = o.getWorldPosition(new THREE.Vector3()).project(camera)
+    out[pk.part] = { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height }
+  })
+  return out
+}
+;(window as unknown as { __room: unknown }).__room = { get project() { return project }, get plan() { return plan }, get sel() { return sel }, get view() { return view }, openExport, select, lookThrough, camScreen }
