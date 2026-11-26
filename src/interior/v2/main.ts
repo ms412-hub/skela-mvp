@@ -20,6 +20,7 @@ import { buildBoxesV2, cutawayWalls, furnitureBoxesV2, isVisible, type Furniture
 import { ASPECTS, PRESETS, PRESET_ORDER, aspectRatio, cameraBasis, fitOrthoSpan, makeCamera, toThree, type Aspect, type OutFormat, type Preset, type SizeName, type VCamera } from './camera.ts'
 import * as PR from './project.ts'
 import { alphaBounds, asciiName, fileName, mtlText, outputSize, tiles, TILE_MAX } from './exportJob.ts'
+import { makeZip, type ZipEntry } from './zip.ts'
 import '../studio/studio.css'
 import './v2.css'
 
@@ -824,7 +825,7 @@ function renderInspector() {
     <section class="rs-sec">
       <h2>v2 시제품에서 해볼 것</h2>
       <p class="rs-note">1. 화면 위 <b>1F · 2F</b> 탭으로 층을 바꾸고, <b>쌓아 보기</b>로 전체를 봐요.<br />2. 왼쪽 <b>카메라</b>를 고르면 오른쪽 아래에 미리보기가 떠요. <b>카메라로 보기</b>로 찍힐 화면을 확인해요.<br />3. 위 <b>내보내기</b>에서 이미지·스프라이트·GLB/OBJ를 만들어요.</p>
-      <p class="rs-note">이 화면(claude.ai)에서는 파일 다운로드가 막혀 있어요. 결과 이미지는 길게 누르거나 오른쪽 클릭으로 저장하고, 3D 파일은 웹사이트에 배포한 뒤 받을 수 있어요.</p>
+      <p class="rs-note">내보낸 파일은 저장 버튼으로 받아요(확인 창이 떠요). 3D 파일과 스프라이트 묶음은 ZIP으로 저장돼요.</p>
     </section>`
   }
 }
@@ -1185,11 +1186,42 @@ async function renderImage(c: VCamera, o: ImgOpts, w: number, h: number, onProgr
 }
 const toBlob = (cv: HTMLCanvasElement, type: string) => new Promise<Blob>((res, rej) => cv.toBlob((b) => (b ? res(b) : rej(new Error('이미지를 만들지 못했어요.'))), type, 0.92))
 const kb = (n: number) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`)
-function dlLink(blob: Blob, name: string) {
+// 파일 저장: claude.ai에서는 downloads 기능(저장 확인 창), 일반 웹사이트에서는 브라우저 다운로드
+type DownloadsApi = { save: (r: { filename: string; data: Blob }) => Promise<{ status: string }> }
+let downloadsApi: DownloadsApi | null = null
+const claudeRt = (window as unknown as { claude?: { use?: (n: string) => Promise<unknown> } }).claude
+claudeRt?.use?.('downloads').then((d) => { downloadsApi = (d as DownloadsApi) ?? null }).catch(() => { downloadsApi = null })
+async function saveFile(blob: Blob, name: string) {
+  if (downloadsApi) {
+    try {
+      const r = await downloadsApi.save({ filename: name, data: blob })
+      toast(r.status === 'delivered' ? '파일을 보냈어요.' : `${name}을(를) 저장했어요.`)
+    } catch (e) {
+      const code = (e as { code?: string }).code
+      toast(code === 'declined' ? '저장을 취소했어요.' : code === 'rate_limited' ? '저장 창이 이미 열려 있어요. 잠시 뒤 다시 눌러주세요.' : code === 'host_unavailable' ? '이 앱에서는 저장할 수 없어요. 브라우저나 컴퓨터에서 열어주세요.' : '여기서는 저장할 수 없어요.')
+    }
+    return
+  }
   const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob); a.download = name; a.textContent = `${name} 받기 (${kb(blob.size)})`
-  return a
+  a.href = URL.createObjectURL(blob); a.download = name
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000)
 }
+function dlLink(blob: Blob, name: string, label?: string) {
+  const b = document.createElement('button')
+  b.type = 'button'; b.className = 'rs-btn primary'
+  b.textContent = label ?? `저장 · ${name} (${kb(blob.size)})`
+  b.title = name
+  b.addEventListener('click', () => saveFile(blob, name))
+  return b
+}
+async function zipBlob(files: { name: string; blob: Blob | string }[]): Promise<Blob> {
+  const enc = new TextEncoder()
+  const entries: ZipEntry[] = []
+  for (const f of files) entries.push({ name: f.name, data: typeof f.blob === 'string' ? enc.encode(f.blob) : new Uint8Array(await f.blob.arrayBuffer()) })
+  return new Blob([makeZip(entries)], { type: 'application/zip' })
+}
+const ASSET_README = 'Skela Room 3D export\nunits: 1 = 1 m, Y up, right-handed\nfront of furniture: +Z\nsingle item: origin at bottom center\n'
 
 // 가구 하나 스프라이트: 그 가구만, 일러스트 2:1 카메라로 맞춘 뒤 투명 여백을 잘라낸다
 async function renderSprite(fid: string, format: OutFormat): Promise<HTMLCanvasElement | null> {
@@ -1275,7 +1307,7 @@ function openExport(tab: 'image' | 'sprite' | '3d', camId?: string) {
     <div class="rs-exp" id="x-body"></div>
     <div class="rs-progress" id="x-prog" hidden><i></i></div>
     <div class="rs-result" id="x-out"></div>
-    <p class="rs-note">claude.ai 화면에서는 다운로드 버튼이 동작하지 않아요. 이미지는 길게 누르거나 오른쪽 클릭으로 저장할 수 있고, 모든 파일은 웹사이트(GitHub Pages)에 배포한 판에서 받을 수 있어요.</p>
+    <p class="rs-note">저장 버튼을 누르면 저장 확인 창이 떠요. 3D 파일은 ZIP으로 묶어서 저장해요.</p>
     <div class="rs-row"><span class="rs-spacer"></span><button class="rs-btn" id="x-close">닫기</button></div>`)
   el.querySelector('#x-close')?.addEventListener('click', close)
   const body = el.querySelector('#x-body') as HTMLElement
@@ -1339,6 +1371,7 @@ function openExport(tab: 'image' | 'sprite' | '3d', camId?: string) {
         const list = (scope === 'one' && sel?.kind === 'furniture' ? plan.furniture.filter((f) => f.id === sel!.id) : (plan.furniture as FurnitureV2[]).filter((f) => f.exportable !== false && f.visible !== false))
         const gal = document.createElement('div'); gal.className = 'rs-gallery'
         out.replaceChildren(gal)
+        const made: { name: string; blob: Blob }[] = []
         for (let i = 0; i < list.length; i++) {
           const f = list[i] as FurnitureV2
           const cv = await renderSprite(f.id, format)
@@ -1346,14 +1379,20 @@ function openExport(tab: 'image' | 'sprite' | '3d', camId?: string) {
           if (!cv) continue
           const blob = await toBlob(cv, 'image/png')
           const name = fileName([project.name, fname(f), f.id], 'png')
+          made.push({ name, blob })
           const fig = document.createElement('figure')
           const img = document.createElement('img'); img.src = URL.createObjectURL(blob); img.dataset.blob = '1'; img.alt = name
           const cap = document.createElement('figcaption'); cap.textContent = `${fname(f)} · ${cv.width}×${cv.height}`
-          fig.append(img, cap, dlLink(blob, name))
-          ;(fig.lastChild as HTMLElement).textContent = '받기'
+          fig.append(img, cap, dlLink(blob, name, '저장'))
           gal.append(fig)
         }
-        if (!gal.children.length) out.innerHTML = '<p class="rs-note">내보낼 가구가 없어요.</p>'
+        if (!gal.children.length) { out.innerHTML = '<p class="rs-note">내보낼 가구가 없어요.</p>'; return }
+        if (made.length > 1) {
+          const z = await zipBlob(made)
+          const row = document.createElement('div'); row.className = 'rs-dl'
+          row.append(dlLink(z, fileName([project.name, floorName(project.currentFloorId), 'sprites'], 'zip'), `스프라이트 ${made.length}장 ZIP으로 저장 (${kb(z.size)})`))
+          out.prepend(row)
+        }
       }))
     } else {
       const one = sel?.kind === 'furniture'
@@ -1371,14 +1410,16 @@ function openExport(tab: 'image' | 'sprite' | '3d', camId?: string) {
         const dl = document.createElement('div'); dl.className = 'rs-dl'
         if (fmt === 'glb') {
           const buf = await new GLTFExporter().parseAsync(asset.root, { binary: true }) as ArrayBuffer
-          dl.append(dlLink(new Blob([buf], { type: 'model/gltf-binary' }), `${base}.glb`))
+          const z = await zipBlob([{ name: `${base}.glb`, blob: new Blob([buf]) }, { name: 'README.txt', blob: ASSET_README }])
+          dl.append(dlLink(z, `${base}_glb.zip`, `저장 · ${base}.glb (ZIP, ${kb(z.size)})`))
         } else {
           const objBase = `skela_${scope}_${asciiName(base) || 'room'}`.replace(/_+$/, '')
           const mtlName = `${objBase}.mtl`
           const mats: { name: string; color: string; opacity?: number }[] = []
           asset.root.traverse((o) => { const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined; if (m?.name) mats.push({ name: m.name, color: `#${m.color.getHexString()}`, opacity: m.opacity }) })
           const objText = `# Skela Room · 1 unit = 1 m · Y up\nmtllib ${mtlName}\n` + new OBJExporter().parse(asset.root)
-          dl.append(dlLink(new Blob([objText], { type: 'text/plain' }), `${objBase}.obj`), dlLink(new Blob([mtlText(mats)], { type: 'text/plain' }), mtlName))
+          const z = await zipBlob([{ name: `${objBase}.obj`, blob: objText }, { name: mtlName, blob: mtlText(mats) }, { name: 'README.txt', blob: ASSET_README }])
+          dl.append(dlLink(z, `${objBase}_obj.zip`, `저장 · ${objBase}.obj + .mtl (ZIP, ${kb(z.size)})`))
         }
         setProg(1)
         const info = document.createElement('p'); info.className = 'rs-note'

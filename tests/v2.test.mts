@@ -160,3 +160,17 @@ test('OBJ 재질과 이름, 3D 좌표 변환', () => {
   assert.equal(asciiName('침대 (furn1)'), 'furn1')
   assert.deepEqual(toAssetMeters(2200, 962, 250), [22, 2.5, 9.62])
 })
+
+test('ZIP: CRC32 값이 표준과 같고, 묶은 파일을 그대로 다시 꺼낼 수 있다(한글 이름 포함)', async () => {
+  const { crc32, makeZip, readZip } = await import('../src/interior/v2/zip.ts')
+  const enc = new TextEncoder()
+  assert.equal(crc32(enc.encode('hello')), 0x3610a686)
+  assert.equal(crc32(enc.encode('')), 0)
+  const files = [{ name: '복도형_1F.glb', data: new Uint8Array([103, 108, 84, 70, 1, 2, 3]) }, { name: 'README.txt', data: enc.encode('1 = 1m') }]
+  const z = makeZip(files)
+  assert.deepEqual([...z.subarray(0, 4)], [0x50, 0x4b, 0x03, 0x04])
+  const back = readZip(z)
+  assert.deepEqual(back.map((f) => f.name), ['복도형_1F.glb', 'README.txt'])
+  assert.deepEqual([...back[0].data], [...files[0].data])
+  assert.equal(new TextDecoder().decode(back[1].data), '1 = 1m')
+})
