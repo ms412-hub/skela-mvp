@@ -1,0 +1,45 @@
+/* Skela Room v2 시제품: 기존 studio.css 위에 층 탭, 카메라, 내보내기 화면만 더한다 */
+.rs-floors { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 3px; z-index: 2; max-width: calc(100% - 260px); overflow-x: auto; }
+.rs-floors button { border: 0; background: transparent; border-radius: 6px; padding: 5px 11px; min-height: 30px; font-weight: 600; white-space: nowrap; }
+.rs-floors button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.rs-floors .sep { width: 1px; background: var(--line); margin: 3px 2px; }
+.rs-cat h3 { grid-column: 1 / -1; margin: 6px 0 0; font-size: 11px; font-weight: 600; color: var(--muted); }
+.rs-cams { display: grid; gap: 6px; }
+.rs-presets { display: flex; flex-wrap: wrap; gap: 4px; }
+.rs-presets button { border: 1px dashed var(--line); background: var(--bg); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; min-height: 30px; }
+.rs-presets button:hover { border-color: var(--accent); border-style: solid; }
+.rs-tree .dim { opacity: 0.5; }
+.rs-tree .tag { font-family: var(--font-ui); font-size: 11px; }
+.rs-floorlist li { display: flex; gap: 4px; align-items: center; }
+.rs-floorlist li > button:first-child { flex: 1; }
+.rs-floorlist span { white-space: nowrap; }
+.rs-floorlist .mini { flex: none; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; justify-content: center; }
+.rs-floorlist .mini:disabled { opacity: 0.35; }
+.rs-check { display: flex; align-items: center; gap: 8px; font-size: 13px; min-height: 30px; }
+.rs-check input { width: 18px; height: 18px; accent-color: var(--accent); }
+.rs-preview { position: absolute; right: 12px; bottom: 52px; border: 2px solid var(--accent); border-radius: 4px; pointer-events: none; box-shadow: 0 2px 10px rgb(0 0 0 / 0.18); }
+.rs-preview span { position: absolute; left: 0; top: -22px; background: var(--accent); color: var(--accent-ink); font-size: 11.5px; padding: 2px 8px; border-radius: 4px 4px 0 0; white-space: nowrap; }
+.rs-frame { position: absolute; pointer-events: none; outline: 2px solid var(--accent); box-shadow: 0 0 0 100vmax rgb(0 0 0 / 0.45); }
+.rs-frame span { position: absolute; left: 0; top: 0; background: var(--accent); color: var(--accent-ink); font-size: 12px; padding: 3px 9px; }
+.rs-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.rs-tabs button { border: 0; background: transparent; padding: 8px 12px; border-bottom: 2px solid transparent; font-weight: 600; color: var(--muted); }
+.rs-tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.rs-exp { display: grid; gap: 10px; }
+.rs-exp .rs-fields { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.rs-result { display: grid; gap: 8px; }
+.rs-result img { max-width: 100%; max-height: 46vh; justify-self: start; border: 1px solid var(--line); border-radius: 6px; background: repeating-conic-gradient(var(--line) 0 25%, var(--panel) 0 50%) 0 0 / 16px 16px; }
+.rs-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; max-height: 46vh; overflow: auto; }
+.rs-gallery figure { margin: 0; display: grid; gap: 4px; justify-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 6px; background: repeating-conic-gradient(var(--line) 0 25%, var(--panel) 0 50%) 0 0 / 14px 14px; }
+.rs-gallery img { max-width: 100%; max-height: 110px; }
+.rs-gallery figcaption { font-size: 11.5px; background: var(--panel); padding: 0 4px; border-radius: 3px; text-align: center; }
+.rs-progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.rs-progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.15s; }
+.rs-dl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.rs-dl a { color: var(--accent); font-weight: 600; }
+.rs-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); margin-left: 6px; vertical-align: 2px; }
+@media (max-width: 900px) {
+  .rs-top .rs-group:last-child { flex-wrap: wrap; width: 100%; min-width: 0; }
+  #rs-template { flex: 1 1 100%; min-width: 0; max-width: 100%; }
+  .rs-floors { top: auto; bottom: 52px; max-width: calc(100% - 24px); }
+  .rs-preview { bottom: 96px; }
+}
