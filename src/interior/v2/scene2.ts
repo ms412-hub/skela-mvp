@@ -29,11 +29,31 @@ export function furnitureBoxesV2(f: FurnitureV2, rawSize = false): SceneBox[] {
   })
 }
 
+// 내려가는 계단 자리만큼 바닥을 뚫는다: 바닥 상자를 구멍 둘레의 띠 상자들로 나눈다 (계단은 0·90·180·270도 기준)
+export function floorWithHoles(floor: SceneBox, holes: Furniture[]): SceneBox[] {
+  let pieces = [floor]
+  for (const f of holes) {
+    const side = Math.round(f.rot / 90) % 2 !== 0
+    const hw = (side ? f.d : f.w) / 2, hd = (side ? f.w : f.d) / 2
+    const hx0 = f.x - hw, hx1 = f.x + hw, hz0 = f.y - hd, hz1 = f.y + hd
+    const next: SceneBox[] = []
+    for (const b of pieces) {
+      const x0 = b.cx - b.w / 2, x1 = b.cx + b.w / 2, z0 = b.cz - b.d / 2, z1 = b.cz + b.d / 2
+      if (hx1 <= x0 || hx0 >= x1 || hz1 <= z0 || hz0 >= z1) { next.push(b); continue }
+      const cx0 = Math.max(x0, hx0), cx1 = Math.min(x1, hx1)
+      const rects = [[x0, z0, x1, Math.max(z0, hz0)], [x0, Math.min(z1, hz1), x1, z1], [x0, Math.max(z0, hz0), cx0, Math.min(z1, hz1)], [cx1, Math.max(z0, hz0), x1, Math.min(z1, hz1)]]
+      for (const [a, c, e, g] of rects) if (e - a > 0.5 && g - c > 0.5) next.push({ ...b, cx: (a + e) / 2, cz: (c + g) / 2, w: e - a, d: g - c })
+    }
+    pieces = next
+  }
+  return pieces.map((b, i) => ({ ...b, id: i ? `floor:${i}` : 'floor' }))
+}
+
 export function buildBoxesV2(plan: Plan, filter: BoxFilter = {}): SceneBox[] {
   const out: SceneBox[] = []
   const furn = (plan.furniture as FurnitureV2[]).filter((f) => (filter.onlyFurniture ? f.id === filter.onlyFurniture : filter.forExport ? isExportable(f) : isVisible(f)))
   if (filter.onlyFurniture) return furn.flatMap((f) => furnitureBoxesV2(f, filter.rawSize))
-  if (!filter.noFloor) out.push(floorBox(plan))
+  if (!filter.noFloor) out.push(...floorWithHoles(floorBox(plan), furn.filter((f) => f.type === 'stairsdown')))
   for (const w of plan.walls) if (!filter.hideWalls?.has(w.id)) out.push(...wallBoxes(plan, w))
   for (const b of openingBoxes(plan)) {
     const op = plan.openings.find((o) => o.id === b.id.split(':')[0])

@@ -15,7 +15,7 @@ const CATEGORY: Record<string, Category> = {
   fridge: 'appliance', tv: 'appliance', tallcab: 'appliance',
   pendant: 'lighting',
   rug: 'decor', plant: 'decor',
-  tile: 'architecture', floortile: 'architecture', stairs: 'architecture',
+  tile: 'architecture', floortile: 'architecture', stairs: 'architecture', stairsdown: 'architecture',
   washer: 'appliance', dryer: 'appliance', rack: 'furniture', vanity: 'furniture', dresser: 'furniture', ottoman: 'furniture', mirror: 'decor',
 }
 
@@ -32,6 +32,22 @@ for (let i = 0; i < STEPS; i++) {
   stairBoxes.push({ x: 47, z, y: 0, w: 6, d: RUN, h: Math.min(250, top + 85), color: '#f6f2ea' }) // 난간벽
 }
 export const STAIRS: FurnitureType = { id: 'stairs', name: '계단', w: 100, d: 266, h: 250, color: '#a9784e', boxes: stairBoxes }
+
+// 내려가는 계단: 앞(+z)이 바닥 높이, 뒤(-z)로 갈수록 아래층(-250cm)까지 내려간다. 이 자리 바닥은 뚫린다(scene2.ts).
+//  - 단은 아래층 바닥(-250)부터 채운 덩어리 + 나무 디딤판, 양옆·뒤는 흰 계단실 벽
+//  - 바닥 위에는 오른쪽(+x)과 뒤쪽에 높이 90cm 흰 난간 (왼쪽은 오르는 계단 난간이 막는다)
+const downBoxes: BoxSpec[] = []
+for (let i = 0; i < STEPS; i++) {
+  const z = 130 - RUN / 2 - i * RUN, top = -RISE * (i + 1)
+  if (top - 3 > -250) downBoxes.push({ x: 0, z, y: -250, w: 92, d: RUN, h: top - 3 + 250, color: '#efe9df' })
+  downBoxes.push({ x: 0, z: z + 1.5, y: top - 3, w: 92, d: RUN + 3, h: 3 })
+}
+downBoxes.push({ x: -48, z: 0, y: -250, w: 4, d: 266, h: 250, color: '#f6f2ea' }) // 왼쪽 계단실 벽
+downBoxes.push({ x: 48, z: 0, y: -250, w: 4, d: 266, h: 250, color: '#f6f2ea' }) // 오른쪽 계단실 벽
+downBoxes.push({ x: 0, z: -131, y: -250, w: 92, d: 4, h: 250, color: '#f6f2ea' }) // 뒤 계단실 벽
+downBoxes.push({ x: 47, z: 0, y: 0, w: 6, d: 266, h: 90, color: '#f6f2ea' }) // 오른쪽 난간
+downBoxes.push({ x: -1, z: -130, y: 0, w: 90, d: 6, h: 90, color: '#f6f2ea' }) // 뒤 난간
+export const STAIRS_DOWN: FurnitureType = { id: 'stairsdown', name: '내려가는 계단', w: 100, d: 266, h: 250, color: '#a9784e', boxes: downBoxes }
 
 // 드레스룸 가구 (v2 전용)
 const CLOTHES = ['#2f3e5c', '#d8c3a5', '#f4f1ea', '#1f1f1f', '#7a2e3a', '#5f7a8c', '#c9a14a']
@@ -75,6 +91,6 @@ const laundry = (id: string, name: string, body: string, glass: string): Furnitu
 ] })
 export const LAUNDRY: FurnitureType[] = [laundry('washer', '세탁기', '#f4f5f6', '#3c4a55'), laundry('dryer', '건조기', '#eceef0', '#55606a')]
 
-export const CATALOG_V2: FurnitureTypeV2[] = [...CATALOG, STAIRS, ...DRESSING, ...LAUNDRY].map((t) => ({ ...t, category: CATEGORY[t.id] ?? 'furniture', pack: 'core_free' as const }))
+export const CATALOG_V2: FurnitureTypeV2[] = [...CATALOG, STAIRS, STAIRS_DOWN, ...DRESSING, ...LAUNDRY].map((t) => ({ ...t, category: CATEGORY[t.id] ?? 'furniture', pack: 'core_free' as const }))
 export const MAX_TYPES = 100
 export const furnitureTypeV2 = (id: string) => CATALOG_V2.find((t) => t.id === id)

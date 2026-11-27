@@ -13,7 +13,7 @@ import { outputSize, tiles, fileName, alphaBounds, mtlText, asciiName, toAssetMe
 const plan64 = () => TEMPLATES.find((t) => t.id === 'corridor64')!.build()
 
 test('v2 목록: 기존 23종 + 계단 + 드레스룸 5종 + 세탁 2종, 모두 분류·팩이 있고 100종 이하', () => {
-  assert.equal(CATALOG_V2.length, 31)
+  assert.equal(CATALOG_V2.length, 32)
   assert.ok(CATALOG_V2.length <= MAX_TYPES)
   for (const t of CATALOG_V2) { assert.ok(t.category); assert.equal(t.pack, 'core_free') }
   assert.equal(CATALOG_V2.find((t) => t.id === 'stairs')!.category, 'architecture')
@@ -247,4 +247,29 @@ test('드레스룸 5종·세탁 2종: 정의 크기 안에 있고, 그리는 크
       for (const s of ['lo', 'hi'] as const) assert.ok(Math.abs(rs[i][s][ax] - rs[j][s][ax]) >= 0.05, `${t.name} ${i}·${j} ${ax}축 ${s} 면 겹침`)
     }
   }
+})
+
+test('샘플: 2층부터 오르는 계단 옆에 내려가는 계단, 그 자리 바닥만 뚫린다', async () => {
+  const { sampleProject } = await import('../src/interior/v2/sample.ts')
+  const pr = sampleProject()
+  pr.floors.forEach((f, i) => {
+    const down = f.plan.furniture.filter((x) => x.type === 'stairsdown')
+    assert.equal(down.length, i === 0 ? 0 : 1, f.name)
+    const floors = buildBoxesV2(f.plan).filter((b) => b.kind === 'floor')
+    const area = floors.reduce((s, b) => s + b.w * b.d, 0)
+    const b = planBounds(f.plan), full = (b.x1 - b.x0) * (b.y1 - b.y0)
+    if (i === 0) assert.equal(floors.length, 1)
+    else {
+      assert.ok(Math.abs(full - area - 100 * 266) < 1, `${f.name} 구멍 넓이`)
+      const d = down[0]
+      for (const fb of floors) assert.ok(fb.cx + fb.w / 2 <= d.x - 50 + 0.01 || fb.cx - fb.w / 2 >= d.x + 50 - 0.01 || fb.cz + fb.d / 2 <= d.y - 133 + 0.01 || fb.cz - fb.d / 2 >= d.y + 133 - 0.01, '구멍 안에 바닥 없음')
+      // 오르는 계단과 나란히 붙어 있고 다른 가구와 겹치지 않는다
+      const up = f.plan.furniture.find((x) => x.type === 'stairs')!
+      assert.equal(d.x - up.x, 100)
+      for (const o of f.plan.furniture) if (o !== d && o !== up && !['rug'].includes(o.type)) {
+        const [w, dd] = o.rot % 180 ? [o.d, o.w] : [o.w, o.d]
+        assert.ok(o.x + w / 2 <= d.x - 50 || o.x - w / 2 >= d.x + 50 || o.y + dd / 2 <= d.y - 133 || o.y - dd / 2 >= d.y + 133 + 60, `${f.name} ${o.type} 계단 앞을 막음`)
+      }
+    }
+  })
 })

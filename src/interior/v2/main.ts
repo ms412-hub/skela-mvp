@@ -30,8 +30,8 @@ type Tool = 'select' | 'wall' | 'door' | 'window'
 type View = 'plan' | '3d' | 'walk' | 'cam'
 
 // 예시 집을 바꾸면 r 번호를 올려 새 예시로 열리게 한다. 예전 칸(OLD_STORE_KEYS)의 작업은 지우지 않고 '예전 작업 불러오기'로 연다
-const STORE_KEY = 'skela-room-v2-project-r13'
-const OLD_STORE_KEYS = ['skela-room-v2-project-r12', 'skela-room-v2-project-r11', 'skela-room-v2-project-r10', 'skela-room-v2-project-r9', 'skela-room-v2-project-r8', 'skela-room-v2-project-r7', 'skela-room-v2-project-r6', 'skela-room-v2-project-r5', 'skela-room-v2-project-r4', 'skela-room-v2-project-r3', 'skela-room-v2-project-r2', 'skela-room-v2-project'] // 최근 것부터
+const STORE_KEY = 'skela-room-v2-project-r14'
+const OLD_STORE_KEYS = ['skela-room-v2-project-r13', 'skela-room-v2-project-r12', 'skela-room-v2-project-r11', 'skela-room-v2-project-r10', 'skela-room-v2-project-r9', 'skela-room-v2-project-r8', 'skela-room-v2-project-r7', 'skela-room-v2-project-r6', 'skela-room-v2-project-r5', 'skela-room-v2-project-r4', 'skela-room-v2-project-r3', 'skela-room-v2-project-r2', 'skela-room-v2-project'] // 최근 것부터
 const GRID = 10, MOVE_SNAP = 5, EYE = 160, WALK_SPEED = 220 // cm/초
 const coarse = matchMedia('(pointer: coarse)').matches
 // 카메라 기능(가상 카메라·미리보기·직접 조종·찰칵)을 잠시 꺼 둔다. 코드와 저장된 카메라 데이터는 그대로 두고 화면에서만 뺀다. true로 바꾸면 다시 켜진다
@@ -878,7 +878,7 @@ function setTool(t: Tool) {
   viewEl.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === t)))
 }
 function renderHint() {
-  if (view === 'walk') { hintEl.textContent = coarse ? '화면을 끌어 둘러보고, ▲▼ 앞뒤 · ◀▶ 옆으로 걸어요. 계단을 보고 오르면 위층, 등지고 ▼ 뒷걸음하면 아래층.' : 'W A S D 걷기 · 방향키 둘러보기 · Shift 빨리 · 계단: 보고 오르면 위층, 등지고 뒷걸음(S)하면 아래층'; return }
+  if (view === 'walk') { hintEl.textContent = coarse ? '화면을 끌어 둘러보고, ▲▼ 앞뒤 · ◀▶ 옆으로 걸어요. 오르는 계단은 위층, 옆 내려가는 계단은 아래층.' : 'W A S D 걷기 · 방향키 둘러보기 · Shift 빨리 · 오르는 계단은 위층, 옆의 내려가는 계단은 아래층'; return }
   if (view === 'cam' && !PILOT_ENABLED) { hintEl.textContent = '카메라 시점이에요. 밝은 틀 안이 내보내기에 찍혀요. 위의 3D를 누르면 편집으로 돌아가요.'; return }
   if (view === 'cam') { hintEl.textContent = coarse ? '끌어서 둘러보고 화살표로 움직여요. −/+ 로 확대, 동그란 버튼으로 찰칵.' : '끌어서 둘러보고 W A S D로 이동, Q·E 높이, 휠로 확대. Space나 동그란 버튼으로 찰칵.'; return }
   if (stack) { hintEl.textContent = '모든 층을 쌓아서 보는 중이에요(보기 전용). 층 탭을 누르면 그 층 편집으로 돌아가요.'; return }
@@ -915,39 +915,42 @@ function walkStep(dt: number) {
   applyLook()
   if (!f && !s) return
   // 걷기 속도 초속 2.2m (예전 1.5m는 느렸다). Shift를 누르고 있으면 두 배로 달린다
-  const speed = WALK_SPEED * (keys.has('shift') ? 2 : 1) * (floorH > 0 ? 0.55 : 1) * dt, fx = -Math.sin(yaw), fz = -Math.cos(yaw)
+  const speed = WALK_SPEED * (keys.has('shift') ? 2 : 1) * (floorH !== 0 ? 0.55 : 1) * dt, fx = -Math.sin(yaw), fz = -Math.cos(yaw)
   const dx = (fx * f - fz * s) * speed, dz = (fz * f + fx * s) * speed
   const p = persp.position
   if (!blocked(p.x + dx, p.z) && canStep(p.x + dx, p.z)) p.x += dx
   if (!blocked(p.x, p.z + dz) && canStep(p.x, p.z + dz)) p.z += dz
 }
 
-// 계단 오르기: 계단 위에 서면 올라간 만큼 눈높이가 오르고, 약 5단(95cm)을 오르면 화면이 어두워지며 다음 층 계단 앞으로 간다.
-// 계단은 바닥을 뚫지 않는 표시용이라 끝까지 오르면 벽 위로 머리가 나오므로 중간에서 넘어간다.
+// 계단: 오르는 계단(stairs)에 서면 오른 만큼 눈높이가 오르고, 옆의 내려가는 계단(stairsdown)에서는 내려간다.
+// 약 5단(95cm)을 오르내리면 화면이 어두워지며 다음 층으로 간다. 계단은 층마다 같은 자리라 끝까지 가면
+// 머리가 벽 위로 나오거나 바닥 밑으로 들어가므로 중간에서 넘어간다.
+//  - 올라가면: 위층 "내려가는 계단" 앞에 그 계단을 등지고 선다 (방금 그 계단으로 올라온 것처럼)
+//  - 내려가면: 아래층 "오르는 계단" 앞에 그 계단을 등지고 선다 (방금 그 계단으로 내려온 것처럼)
 let floorH = 0, arriveFade = 0
 const STAIR_SWITCH = 95
-const stairOf = (pl: typeof plan) => pl.furniture.find((f) => f.type === 'stairs')
+const stairOf = (pl: typeof plan, type = 'stairs') => pl.furniture.find((f) => f.type === type)
 function groundAt(x: number, z: number): number {
   for (const f of plan.furniture) {
-    if (f.type !== 'stairs') continue
+    if (f.type !== 'stairs' && f.type !== 'stairsdown') continue
     const a = THREE.MathUtils.degToRad(f.rot), c = Math.cos(a), sn = Math.sin(a), dx = x - f.x, dy = z - f.y
-    const lx = c * dx + sn * dy, lz = -sn * dx + c * dy // 계단 기준: 앞(+z)이 낮고 뒤(-z)가 높다
-    if (Math.abs(lx) < 48 && Math.abs(lz) < 133) return Math.max(0, Math.min(1, (130 - lz) / 260)) * 250
+    const lx = c * dx + sn * dy, lz = -sn * dx + c * dy // 계단 기준: 앞(+z)이 바닥 높이, 뒤(-z)로 갈수록 오르거나 내려간다
+    if (Math.abs(lx) < 46 && Math.abs(lz) < 133) return Math.max(0, Math.min(1, (130 - lz) / 260)) * 250 * (f.type === 'stairs' ? 1 : -1)
   }
   return 0
 }
-const nextFloorId = () => project.floors[project.floors.findIndex((f) => f.id === project.currentFloorId) + 1]?.id
-// 옆에서 계단 중간으로 뛰어오르기 막기, 맨 위층에서는 넘어갈 높이 앞에서 멈춘다
+const floorAt = (d: number) => project.floors[project.floors.findIndex((f) => f.id === project.currentFloorId) + d]?.id
+// 옆에서 계단 중간으로 올라타거나 구멍으로 떨어지기 막기. 위층·아래층이 없으면 넘어갈 높이 앞에서 멈춘다
 function canStep(x: number, z: number) {
   const g = groundAt(x, z)
-  if (g - floorH > 30) return false
-  if (g >= STAIR_SWITCH && !nextFloorId()) return false
-  if (stairLock && g > floorH && g > 90) return false // 내려와서 바로 뒤로 다시 오르지 않게 (머리가 벽 위로 나오지 않게)
+  if (Math.abs(g - floorH) > 30) return false
+  if (g >= STAIR_SWITCH && !floorAt(1)) return false
+  if (g <= -STAIR_SWITCH && !floorAt(-1)) return false
   return true
 }
-// 이 층 계단 바로 앞(70cm)에 계단을 등지고 선다. 계단이 없으면 현관에서 시작
-function placeAtStairs() {
-  const f = stairOf(plan)
+// 이 층 계단 바로 앞(70cm)에 계단을 등지고 선다. 그 계단이 없으면 오르는 계단, 그것도 없으면 현관
+function placeAtStairs(type = 'stairs') {
+  const f = stairOf(plan, type) ?? stairOf(plan)
   floorH = 0
   if (f) {
     const a = THREE.MathUtils.degToRad(f.rot), c = Math.cos(a), sn = Math.sin(a), lz = 133 + 70
@@ -958,35 +961,16 @@ function placeAtStairs() {
   persp.position.set(start.x, EYE, start.y)
   yaw = Math.atan2(-(start.lookX - start.x), -(start.lookY - start.y)); pitch = -0.08; applyLook()
 }
-// 내려가기: 아래층이 있는 층에서 계단을 등지고(뒷걸음 S) 계단에 올라서면, 아래층 계단 중간(약 4.5단 높이)에
-// 계단 아래쪽을 보고 선다. 그대로 W로 걸어 내려가면 된다. 넘어온 직후에는 다시 넘어가지 않게 잠근다(바닥 가까이 내려오면 풀림)
-let stairLock = false
-function placeOnStairsTop() {
-  const f = stairOf(plan)
-  if (!f) { placeAtStairs(); return }
-  const a = THREE.MathUtils.degToRad(f.rot), c = Math.cos(a), sn = Math.sin(a), lz = 40
-  persp.position.set(f.x - sn * lz, 0, f.y + c * lz)
-  floorH = groundAt(persp.position.x, persp.position.z)
-  persp.position.y = EYE + floorH
-  yaw = Math.atan2(sn, -c); pitch = -0.3; applyLook()
-}
 function stairStep(dt: number) {
   const p = persp.position
-  const before = floorH
   floorH = groundAt(p.x, p.z)
-  if (stairLock && floorH < 50) stairLock = false
-  const i = project.floors.findIndex((f) => f.id === project.currentFloorId)
-  const next = project.floors[i + 1]?.id, prev = project.floors[i - 1]?.id
-  const st = stairOf(plan)
-  if (!stairLock && prev && st && before === 0 && floorH > 0) {
-    const a = THREE.MathUtils.degToRad(st.rot)
-    const facing = -Math.sin(yaw) * Math.sin(a) + -Math.cos(yaw) * -Math.cos(a) // 보는 방향 · 계단 오르는 방향
-    if (facing < -0.3) { switchFloor(prev); placeOnStairsTop(); arriveFade = 1; stairLock = true; return }
-  }
   p.y += (EYE + floorH - p.y) * Math.min(1, dt * 12)
-  if (!stairLock && next && floorH >= STAIR_SWITCH) { switchFloor(next); placeAtStairs(); arriveFade = 1 }
+  const up = floorAt(1), down = floorAt(-1)
+  if (up && floorH >= STAIR_SWITCH) { switchFloor(up); placeAtStairs('stairsdown'); arriveFade = 1 }
+  else if (down && floorH <= -STAIR_SWITCH) { switchFloor(down); placeAtStairs('stairs'); arriveFade = 1 }
   arriveFade = Math.max(0, arriveFade - dt * 2.2)
-  const climb = next && !stairLock ? Math.max(0, Math.min(1, (floorH - 35) / (STAIR_SWITCH - 35))) : 0
+  const near = (h: number) => Math.max(0, Math.min(1, (h - 35) / (STAIR_SWITCH - 35)))
+  const climb = Math.max(up ? near(floorH) : 0, down ? near(-floorH) : 0)
   fadeEl.style.opacity = String(Math.max(climb, arriveFade) * 0.9)
 }
 
@@ -1913,5 +1897,5 @@ function camScreen(id: string) {
   })
   return out
 }
-;(window as unknown as { __room: unknown }).__room = { get project() { return project }, get plan() { return plan }, get sel() { return sel }, get view() { return view }, openExport, select, lookThrough, camScreen, walkPos: () => ({ x: Math.round(persp.position.x), y: Math.round(persp.position.z), eye: Math.round(persp.position.y), ground: Math.round(floorH) }),
+;(window as unknown as { __room: unknown }).__room = { get project() { return project }, get scene() { return scene }, get plan() { return plan }, get sel() { return sel }, get view() { return view }, openExport, select, lookThrough, camScreen, walkPos: () => ({ x: Math.round(persp.position.x), y: Math.round(persp.position.z), eye: Math.round(persp.position.y), ground: Math.round(floorH) }),
   doors: () => doorLeaves.map((d) => ({ x: Math.round(d.cx), y: Math.round(d.cz), open: Math.round(d.open * 100) / 100 })) }
