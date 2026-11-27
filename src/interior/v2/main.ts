@@ -878,7 +878,7 @@ function setTool(t: Tool) {
   viewEl.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === t)))
 }
 function renderHint() {
-  if (view === 'walk') { hintEl.textContent = coarse ? '화면을 끌어 둘러보고, ▲▼ 앞뒤 · ◀▶ 옆으로 걸어요. 계단을 오르면 위층.' : 'W A S D 걷기 · 방향키 둘러보기 · Shift 빨리 · 계단을 오르면 위층, 아래층은 위 층 버튼'; return }
+  if (view === 'walk') { hintEl.textContent = coarse ? '화면을 끌어 둘러보고, ▲▼ 앞뒤 · ◀▶ 옆으로 걸어요. 계단을 보고 오르면 위층, 등지고 ▼ 뒷걸음하면 아래층.' : 'W A S D 걷기 · 방향키 둘러보기 · Shift 빨리 · 계단: 보고 오르면 위층, 등지고 뒷걸음(S)하면 아래층'; return }
   if (view === 'cam' && !PILOT_ENABLED) { hintEl.textContent = '카메라 시점이에요. 밝은 틀 안이 내보내기에 찍혀요. 위의 3D를 누르면 편집으로 돌아가요.'; return }
   if (view === 'cam') { hintEl.textContent = coarse ? '끌어서 둘러보고 화살표로 움직여요. −/+ 로 확대, 동그란 버튼으로 찰칵.' : '끌어서 둘러보고 W A S D로 이동, Q·E 높이, 휠로 확대. Space나 동그란 버튼으로 찰칵.'; return }
   if (stack) { hintEl.textContent = '모든 층을 쌓아서 보는 중이에요(보기 전용). 층 탭을 누르면 그 층 편집으로 돌아가요.'; return }
@@ -942,6 +942,7 @@ function canStep(x: number, z: number) {
   const g = groundAt(x, z)
   if (g - floorH > 30) return false
   if (g >= STAIR_SWITCH && !nextFloorId()) return false
+  if (stairLock && g > floorH && g > 90) return false // 내려와서 바로 뒤로 다시 오르지 않게 (머리가 벽 위로 나오지 않게)
   return true
 }
 // 이 층 계단 바로 앞(70cm)에 계단을 등지고 선다. 계단이 없으면 현관에서 시작
@@ -957,14 +958,35 @@ function placeAtStairs() {
   persp.position.set(start.x, EYE, start.y)
   yaw = Math.atan2(-(start.lookX - start.x), -(start.lookY - start.y)); pitch = -0.08; applyLook()
 }
+// 내려가기: 아래층이 있는 층에서 계단을 등지고(뒷걸음 S) 계단에 올라서면, 아래층 계단 중간(약 4.5단 높이)에
+// 계단 아래쪽을 보고 선다. 그대로 W로 걸어 내려가면 된다. 넘어온 직후에는 다시 넘어가지 않게 잠근다(바닥 가까이 내려오면 풀림)
+let stairLock = false
+function placeOnStairsTop() {
+  const f = stairOf(plan)
+  if (!f) { placeAtStairs(); return }
+  const a = THREE.MathUtils.degToRad(f.rot), c = Math.cos(a), sn = Math.sin(a), lz = 40
+  persp.position.set(f.x - sn * lz, 0, f.y + c * lz)
+  floorH = groundAt(persp.position.x, persp.position.z)
+  persp.position.y = EYE + floorH
+  yaw = Math.atan2(sn, -c); pitch = -0.3; applyLook()
+}
 function stairStep(dt: number) {
   const p = persp.position
+  const before = floorH
   floorH = groundAt(p.x, p.z)
+  if (stairLock && floorH < 50) stairLock = false
+  const i = project.floors.findIndex((f) => f.id === project.currentFloorId)
+  const next = project.floors[i + 1]?.id, prev = project.floors[i - 1]?.id
+  const st = stairOf(plan)
+  if (!stairLock && prev && st && before === 0 && floorH > 0) {
+    const a = THREE.MathUtils.degToRad(st.rot)
+    const facing = -Math.sin(yaw) * Math.sin(a) + -Math.cos(yaw) * -Math.cos(a) // 보는 방향 · 계단 오르는 방향
+    if (facing < -0.3) { switchFloor(prev); placeOnStairsTop(); arriveFade = 1; stairLock = true; return }
+  }
   p.y += (EYE + floorH - p.y) * Math.min(1, dt * 12)
-  const next = nextFloorId()
-  if (next && floorH >= STAIR_SWITCH) { switchFloor(next); placeAtStairs(); arriveFade = 1 }
+  if (!stairLock && next && floorH >= STAIR_SWITCH) { switchFloor(next); placeAtStairs(); arriveFade = 1 }
   arriveFade = Math.max(0, arriveFade - dt * 2.2)
-  const climb = next ? Math.max(0, Math.min(1, (floorH - 35) / (STAIR_SWITCH - 35))) : 0
+  const climb = next && !stairLock ? Math.max(0, Math.min(1, (floorH - 35) / (STAIR_SWITCH - 35))) : 0
   fadeEl.style.opacity = String(Math.max(climb, arriveFade) * 0.9)
 }
 
