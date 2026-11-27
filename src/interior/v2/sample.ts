@@ -61,16 +61,16 @@ const FAMILY: Item[] = [
 const WORK: Item[] = [
   STAIRS, ...BATHS,
   // 작업실 (둘째 방)
-  ['desk', 165, 40, 180, { w: 200, d: 70 }], ['chair', 165, 105, 180], ['bookshelf', 20, 300, 270], ['table', 165, 300, 0, { w: 120, d: 60, h: 90 }, '#8a8f94'],
+  ['desk', 165, 40, 180, { w: 200, d: 70 }, '#f2efe8'], ['chair', 165, 105, 180, {}, '#e9b44c'], ['bookshelf', 20, 300, 270], ['table', 165, 300, 0, { w: 120, d: 60, h: 90 }, '#8a8f94'],
   // 음악실 (방3)
   ['sofa', 50, 760, 270, { w: 160 }, '#3f5f7a'], ['rug', 190, 760, 0, { w: 140, d: 160 }, '#c35d4a'], ['table', 190, 760, 0, { w: 60, d: 60 }], ['bookshelf', 260, 940, 180],
   // 오픈 오피스 (가운데 위): 책상 4개가 마주 보는 섬
-  ['desk', 880, 150], ['desk', 1080, 150], ['desk', 880, 210, 180], ['desk', 1080, 210, 180],
-  ['chair', 880, 95], ['chair', 1080, 95], ['chair', 880, 265, 180], ['chair', 1080, 265, 180],
+  ['desk', 880, 150, 0, {}, '#f2efe8'], ['desk', 1080, 150, 0, {}, '#f2efe8'], ['desk', 880, 210, 180, {}, '#f2efe8'], ['desk', 1080, 210, 180, {}, '#f2efe8'],
+  ['chair', 880, 95, 0, {}, '#e07a5f'], ['chair', 1080, 95, 0, {}, '#e07a5f'], ['chair', 880, 265, 180, {}, '#e07a5f'], ['chair', 1080, 265, 180, {}, '#e07a5f'],
   ['bookshelf', 570, 250, 270], ['bookshelf', 1380, 150, 90], ['bookshelf', 1380, 250, 90], ['plant', 1300, 40], ['plant', 620, 340],
   // 회의실 (가운데 아래): 6인 테이블 + 화면
   ['dining', 975, 790, 0, { w: 240, d: 100 }, '#d8d2c6'],
-  ['chair', 915, 712], ['chair', 975, 712], ['chair', 1035, 712], ['chair', 915, 868, 180], ['chair', 975, 868, 180], ['chair', 1035, 868, 180],
+  ['chair', 915, 712, 0, {}, '#3d8c8c'], ['chair', 975, 712, 0, {}, '#3d8c8c'], ['chair', 1035, 712, 0, {}, '#3d8c8c'], ['chair', 915, 868, 180, {}, '#3d8c8c'], ['chair', 975, 868, 180, {}, '#3d8c8c'], ['chair', 1035, 868, 180, {}, '#3d8c8c'],
   ['tv', 1375, 790, 90], ['bookshelf', 575, 760, 270], ['plant', 600, 920],
   // 게임방 (방4)
   ['tv', 1735, 200, 90], ['sofa', 1460, 200, 270, {}, '#7a4a8c'], ['rug', 1600, 200, 0, { w: 140, d: 200 }, '#2f3b4a'], ['plant', 1440, 360],
@@ -110,7 +110,7 @@ const LEISURE: Item[] = [
 
 export const SAMPLE_FLOORS = [
   { name: '2F', theme: '가족 층', floorColor: '#b8916a', wallColor: '#efe9df', items: FAMILY },
-  { name: '3F', theme: '작업·취미 층', floorColor: '#a9a59c', wallColor: '#e6e8e6', items: WORK },
+  { name: '3F', theme: '작업·취미 층', floorColor: '#e6d6b8', wallColor: '#fbf9f4', items: WORK },
   { name: '4F', theme: '휴식·게스트 층', floorColor: '#c7b08c', wallColor: '#f3efe6', items: LEISURE },
 ]
 
