@@ -210,5 +210,8 @@ test('예시 4층 집: 층마다 다르게 꾸며지고, 가구가 벽·복도·
     }
   }
   assert.equal(signatures.size, 4, '네 층의 배치가 모두 다르다')
+  // 식탁은 1층에만
+  assert.ok(pr.floors[0].plan.furniture.some((f) => f.type === 'dining'), '1층에는 식탁이 있다')
+  for (const fl of pr.floors.slice(1)) assert.ok(!fl.plan.furniture.some((f) => f.type === 'dining'), `${fl.name}에는 식탁이 없다`)
   assert.notEqual(pr.floors[1].plan.floorColor, pr.floors[2].plan.floorColor)
 })
