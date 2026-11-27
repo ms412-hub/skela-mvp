@@ -18,10 +18,19 @@ const CATEGORY: Record<string, Category> = {
   tile: 'architecture', floortile: 'architecture', stairs: 'architecture',
 }
 
-// 계단: 위치 표시용 (층을 뚫지 않는다). 디딤판 13단, 단 높이 20cm, 깊이 20cm. 앞(+z)에서 올라가 뒤(-z)가 가장 높다.
+// 계단: 위치 표시용 (층을 뚫지 않는다). 13단, 벽 높이 250cm에 맞춘다. 앞(+z)에서 올라가 뒤(-z)가 가장 높다.
+//  - 흰 챌판(단 덩어리) + 앞으로 살짝 튀어나온 나무 디딤판 → 실제 계단처럼 두 가지 색
+//  - 오른쪽(+x)에 계단 모양을 따라 오르는 흰 난간벽 (높이 = 디딤판 + 85cm, 벽 높이 넘지 않음)
 const STEPS = 13
-const stairBoxes: BoxSpec[] = Array.from({ length: STEPS }, (_, i): BoxSpec => ({ x: 0, z: 130 - 10 - i * 20, y: 0, w: 100, d: 20, h: 20 * (i + 1) }))
-export const STAIRS: FurnitureType = { id: 'stairs', name: '계단', w: 100, d: 260, h: 260, color: '#b9a58a', boxes: stairBoxes }
+const RISE = 250 / STEPS, RUN = 20
+const stairBoxes: BoxSpec[] = []
+for (let i = 0; i < STEPS; i++) {
+  const z = 130 - RUN / 2 - i * RUN, top = RISE * (i + 1)
+  stairBoxes.push({ x: -3, z, y: 0, w: 94, d: RUN, h: top - 3, color: '#efe9df' }) // 챌판(단 몸통)
+  stairBoxes.push({ x: -3, z: z + 1.5, y: top - 3, w: 94, d: RUN + 3, h: 3 }) // 디딤판 (앞으로 1.5cm)
+  stairBoxes.push({ x: 47, z, y: 0, w: 6, d: RUN, h: Math.min(250, top + 85), color: '#f6f2ea' }) // 난간벽
+}
+export const STAIRS: FurnitureType = { id: 'stairs', name: '계단', w: 100, d: 266, h: 250, color: '#a9784e', boxes: stairBoxes }
 
 export const CATALOG_V2: FurnitureTypeV2[] = [...CATALOG, STAIRS].map((t) => ({ ...t, category: CATEGORY[t.id] ?? 'furniture', pack: 'core_free' as const }))
 export const MAX_TYPES = 100

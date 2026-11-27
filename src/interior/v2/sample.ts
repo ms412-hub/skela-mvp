@@ -32,7 +32,8 @@ const BATHS: Item[] = [
   ['tile', 440, 761, 0, { w: 210, d: 391 }], ['toilet', 511, 680, 90], ['basin', 358, 640, 270], ['bathtub', 440, 918],
   ['tile', 2080, 832, 0, { w: 230, d: 250 }], ['bathtub', 2105, 920], ['toilet', 2161, 760, 90], ['basin', 2040, 730],
 ]
-const STAIRS: Item = ['stairs', 720, 62, 90]
+// 계단: 거실 왼쪽 벽을 따라, 복도 쪽(아래)에서 올라가기 시작해 위쪽으로 오른다. 창문을 가리지 않는다
+const STAIRS: Item = ['stairs', 605, 140, 0]
 
 // 2F 가족 층: 아이방 2, 가족 라운지, 놀이방·식당, 서재, 드레스룸, 부부 침실
 const FAMILY: Item[] = [
@@ -43,7 +44,7 @@ const FAMILY: Item[] = [
   ['bed', 65, 855, 180, { w: 100, d: 200 }, '#7fb3d5'], ['desk', 295, 700, 270], ['chair', 240, 700, 270], ['bookshelf', 220, 940, 180],
   // 가족 라운지 (가운데 위): TV는 오른쪽 벽, 소파는 옆으로 앉아 본다 + 왼쪽 창가 독서 구석
   ['tv', 1375, 200, 90], ['rug', 1235, 200, 90, {}, '#5d7a8c'], ['table', 1235, 200, 90, { w: 70, d: 50 }], ['sofa', 1100, 200, 270, {}, '#c9875a'],
-  ['bookshelf', 570, 250, 270], ['chair', 660, 300, 270, {}, '#a0522d'], ['table', 720, 300, 0, { w: 50, d: 50, h: 55 }], ['plant', 640, 360],
+  ['bookshelf', 760, 380], ['chair', 660, 300, 270, {}, '#a0522d'], ['table', 720, 300, 0, { w: 50, d: 50, h: 55 }], ['plant', 640, 360],
   ['chair', 960, 330, 180], ['plant', 1300, 360],
   // 놀이방 + 아이 공부 코너 (가운데 아래, 식탁 없음)
   ['rug', 720, 800, 0, {}, '#d9a441'], ['table', 720, 800, 0, { w: 60, d: 60, h: 40 }], ['bookshelf', 620, 940, 180], ['bookshelf', 710, 940, 180],
@@ -69,7 +70,7 @@ const WORK: Item[] = [
   // 오픈 오피스 (가운데 위): 책상 4개가 마주 보는 섬
   ['desk', 880, 150, 0, {}, '#f2efe8'], ['desk', 1080, 150, 0, {}, '#f2efe8'], ['desk', 880, 210, 180, {}, '#f2efe8'], ['desk', 1080, 210, 180, {}, '#f2efe8'],
   ['chair', 880, 95, 0, {}, '#e07a5f'], ['chair', 1080, 95, 0, {}, '#e07a5f'], ['chair', 880, 265, 180, {}, '#e07a5f'], ['chair', 1080, 265, 180, {}, '#e07a5f'],
-  ['bookshelf', 570, 250, 270], ['bookshelf', 1380, 150, 90], ['bookshelf', 1380, 250, 90], ['plant', 1300, 40], ['plant', 620, 340],
+  ['bookshelf', 1380, 150, 90], ['bookshelf', 1380, 250, 90], ['bookshelf', 1380, 350, 90], ['plant', 1300, 40], ['plant', 620, 340],
   // 메이커 작업대 + 휴게 라운지 (가운데 아래, 식탁 없음)
   ['table', 1010, 770, 0, { w: 180, d: 90, h: 92 }, '#3d8c8c'],
   ['stool', 960, 700, 0, {}, '#e07a5f'], ['stool', 1060, 700, 0, {}, '#e07a5f'], ['stool', 960, 840, 0, {}, '#e07a5f'], ['stool', 1060, 840, 0, {}, '#e07a5f'],
@@ -93,10 +94,10 @@ const LEISURE: Item[] = [
   ['bed', 165, 118, 0, {}, '#5f7a8c'], ['wardrobe', 440, 33], ['plant', 290, 40],
   // 게스트룸 2 (방3): 싱글 침대 두 개
   ['bed', 65, 855, 180, { w: 100, d: 200 }, '#c9b38f'], ['bed', 195, 855, 180, { w: 100, d: 200 }, '#c9b38f'], ['plant', 295, 600],
-  // 홈시어터 (가운데 위): 왼쪽 벽 큰 화면, 영화관처럼 앞뒤 두 줄
-  ['tv', 575, 280, 270, { w: 240 }], ['rug', 690, 280, 90, { w: 200, d: 120 }, '#3c4a5c'],
-  ['sofa', 830, 280, 90, {}, '#9c3d3d'], ['sofa', 1010, 280, 90, { h: 100 }, '#9c3d3d'],
-  ['table', 1130, 280, 90, { w: 120, d: 40, h: 75 }, '#5a4636'], ['plant', 1360, 40], ['plant', 1360, 340], ['plant', 1200, 40],
+  // 홈시어터 (가운데 위): 복도 쪽에 세운 큰 화면을 보고, 영화관처럼 앞뒤 두 줄 (창 쪽이 뒷줄)
+  ['tv', 1000, 378, 180, { w: 240 }], ['rug', 1000, 300, 0, { w: 260, d: 80 }, '#3c4a5c'],
+  ['sofa', 1000, 210, 0, {}, '#9c3d3d'], ['sofa', 1000, 100, 0, { h: 100 }, '#9c3d3d'],
+  ['table', 1000, 30, 0, { w: 160, d: 40, h: 75 }, '#5a4636'], ['plant', 1360, 40], ['plant', 1360, 340], ['plant', 760, 40],
   // 바·카페 (가운데 아래)
   ['island', 975, 760], ['stool', 920, 695], ['stool', 975, 695], ['stool', 1030, 695],
   ['pendant', 915, 760], ['pendant', 975, 760], ['pendant', 1035, 760],
@@ -121,8 +122,9 @@ export const SAMPLE_FLOORS = [
 
 export function sampleProject(): PR.Project {
   let p1 = findTemplate('corridor64')!.build()
-  p1 = P.addFurniture(p1, 'stairs', 720, 62, furnitureTypeV2('stairs')!)
-  p1 = P.updateFurniture(p1, p1.furniture[p1.furniture.length - 1].id, { rot: 90 })
+  // 1층에도 같은 자리에 계단. 계단 자리에 있던 기본 가구(책장)는 뺀다
+  p1 = { ...p1, furniture: p1.furniture.filter((f) => !(f.x > 540 && f.x < 670 && f.y < 290)) }
+  p1 = P.addFurniture(p1, 'stairs', STAIRS[1], STAIRS[2], furnitureTypeV2('stairs')!)
   let pr = PR.newProject({ ...p1, name: '1F' }, '복도형 64평 (4층)')
   for (const f of SAMPLE_FLOORS) {
     pr = PR.addFloor(PR.selectFloor(pr, pr.floors[pr.floors.length - 1].id))
