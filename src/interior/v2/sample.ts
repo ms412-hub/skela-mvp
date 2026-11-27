@@ -110,7 +110,7 @@ const LEISURE: Item[] = [
 
 export const SAMPLE_FLOORS = [
   { name: '2F', theme: '가족 층', floorColor: '#b8916a', wallColor: '#efe9df', items: FAMILY },
-  { name: '3F', theme: '작업·취미 층', floorColor: '#c8874e', wallColor: '#fbf6ee', items: WORK },
+  { name: '3F', theme: '작업·취미 층', floorColor: '#cb9a68', wallColor: '#fbf6ee', items: WORK },
   { name: '4F', theme: '휴식·게스트 층', floorColor: '#c7b08c', wallColor: '#f3efe6', items: LEISURE },
 ]
 

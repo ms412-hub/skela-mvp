@@ -30,8 +30,8 @@ type Tool = 'select' | 'wall' | 'door' | 'window'
 type View = 'plan' | '3d' | 'walk' | 'cam'
 
 // 예시 집을 바꾸면 r 번호를 올려 새 예시로 열리게 한다. 예전 칸(OLD_STORE_KEYS)의 작업은 지우지 않고 '예전 작업 불러오기'로 연다
-const STORE_KEY = 'skela-room-v2-project-r3'
-const OLD_STORE_KEYS = ['skela-room-v2-project-r2', 'skela-room-v2-project'] // 최근 것부터
+const STORE_KEY = 'skela-room-v2-project-r4'
+const OLD_STORE_KEYS = ['skela-room-v2-project-r3', 'skela-room-v2-project-r2', 'skela-room-v2-project'] // 최근 것부터
 const GRID = 10, MOVE_SNAP = 5, EYE = 160
 const coarse = matchMedia('(pointer: coarse)').matches
 // 카메라 기능(가상 카메라·미리보기·직접 조종·찰칵)을 잠시 꺼 둔다. 코드와 저장된 카메라 데이터는 그대로 두고 화면에서만 뺀다. true로 바꾸면 다시 켜진다
