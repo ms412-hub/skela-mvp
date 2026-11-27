@@ -31,6 +31,8 @@ type View = 'plan' | '3d' | 'walk' | 'cam'
 const STORE_KEY = 'skela-room-v2-project'
 const GRID = 10, MOVE_SNAP = 5, EYE = 160
 const coarse = matchMedia('(pointer: coarse)').matches
+// 카메라 기능(가상 카메라·미리보기·직접 조종·찰칵)을 잠시 꺼 둔다. 코드와 저장된 카메라 데이터는 그대로 두고 화면에서만 뺀다. true로 바꾸면 다시 켜진다
+const CAMERA_ENABLED = false
 
 /* ───── 예시 프로젝트: 64평 복도형 1F(계단 추가) + 2F(같은 벽, 침실 위주) + 카메라 3개 ───── */
 function sampleProject(): PR.Project {
@@ -109,7 +111,7 @@ const root = document.getElementById('room-app') as HTMLElement
 root.innerHTML = `
 <div class="rs">
   <header class="rs-top">
-    <div class="rs-brand">Skela Room <span class="rs-badge">v2 시제품</span> <small>층 · 카메라 · 내보내기</small></div>
+    <div class="rs-brand">Skela Room <span class="rs-badge">v2 시제품</span> <small>${CAMERA_ENABLED ? "층 · 카메라 · 내보내기" : "층 · 내보내기"}</small></div>
     <div class="rs-seg" role="group" aria-label="보기">
       <button data-view="plan">평면</button><button data-view="3d">3D</button><button data-view="walk">걷기</button>
     </div>
@@ -129,7 +131,7 @@ root.innerHTML = `
   </header>
   <aside class="rs-left">
     <section class="rs-sec"><h2>층</h2><ul class="rs-tree rs-floorlist" id="rs-floorlist"></ul></section>
-    <section class="rs-sec"><h2>카메라</h2><div class="rs-cams"><div class="rs-presets" id="rs-presets"></div><ul class="rs-tree" id="rs-camlist"></ul></div></section>
+    ${CAMERA_ENABLED ? '<section class="rs-sec"><h2>카메라</h2><div class="rs-cams"><div class="rs-presets" id="rs-presets"></div><ul class="rs-tree" id="rs-camlist"></ul></div></section>' : ''}
     <section class="rs-sec"><h2>가구 넣기</h2><div class="rs-cat" id="rs-cat"></div></section>
     <section class="rs-sec"><h2>방 구성</h2><ul class="rs-tree" id="rs-tree"></ul></section>
   </aside>
@@ -399,6 +401,7 @@ function frameRect(c: VCamera, W: number, H: number) {
 let camDraft: VCamera | null = null
 function updateCamHelpers() {
   disposeGroup(helpers)
+  if (!CAMERA_ENABLED) return
   if (stack || view === 'cam' || view === 'walk') return // 걷기에서는 아이콘이 눈앞을 가리므로 숨긴다
   const accent = new THREE.Color(cssVar('--accent'))
   for (const c0 of project.cameras) {
@@ -599,6 +602,7 @@ function pilotStep(dt: number) {
 let lastShot: { blob: Blob; name: string; url: string } | null = null
 let chipTimer = 0
 async function shoot() {
+  if (!CAMERA_ENABLED) return
   if (stack) { toast('쌓아 보기에서는 찍을 수 없어요. 층을 골라주세요.'); return }
   let cam: VCamera
   if (view === 'cam' && pilot) cam = cloneCam(pilot)
@@ -914,7 +918,7 @@ const wallNo = (id: string) => plan.walls.findIndex((w) => w.id === id) + 1
 {
   const cats: Category[] = ['furniture', 'appliance', 'lighting', 'decor', 'architecture']
   $('rs-cat').innerHTML = cats.map((c) => `<h3>${CATEGORY_NAME[c]}</h3>` + CATALOG_V2.filter((t) => t.category === c).map((t) => `<button data-add="${t.id}" title="${t.name} 넣기"><b>${t.name}</b><span>${t.w}×${t.d}</span></button>`).join('')).join('')
-  $('rs-presets').innerHTML = PRESET_ORDER.map((p) => `<button data-newcam="${p}">+ ${PRESETS[p].label}</button>`).join('') + `<button data-newcam="current">+ 현재 시점</button>`
+  if (CAMERA_ENABLED) $('rs-presets').innerHTML = PRESET_ORDER.map((p) => `<button data-newcam="${p}">+ ${PRESETS[p].label}</button>`).join('') + `<button data-newcam="current">+ 현재 시점</button>`
 }
 
 function renderFloors() {
@@ -929,6 +933,7 @@ function renderFloors() {
   }).join('')
 }
 function renderCams() {
+  if (!CAMERA_ENABLED) return
   const cur = (id: string) => String(sel?.kind === 'camera' && sel.id === id)
   $('rs-camlist').innerHTML = project.cameras.length
     ? project.cameras.map((c) => `<li><button data-pick="camera:${c.id}" aria-current="${cur(c.id)}">${esc(c.name)}<span class="tag">${floorName(c.floorId)} · ${PRESETS[c.preset].label}</span></button></li>`).join('')
@@ -1026,11 +1031,11 @@ function renderInspector() {
       </div>
       <div class="rs-stat"><span>이 층 바깥 크기</span><b>${((b.x1 - b.x0) / 100).toFixed(1)} × ${((b.y1 - b.y0) / 100).toFixed(1)} m</b></div>
       <div class="rs-stat"><span>이 층 넓이 (대략)</span><b>${m2.toFixed(1)} m² · ${(m2 / 3.3058).toFixed(1)}평</b></div>
-      <div class="rs-stat"><span>층 · 카메라</span><b>${project.floors.length}개 · ${project.cameras.length}개</b></div>
+      <div class="rs-stat"><span>${CAMERA_ENABLED ? '층 · 카메라' : '층'}</span><b>${project.floors.length}개${CAMERA_ENABLED ? ` · ${project.cameras.length}개` : ''}</b></div>
     </section>
     <section class="rs-sec">
       <h2>v2 시제품에서 해볼 것</h2>
-      <p class="rs-note">1. 화면 위 <b>1F · 2F</b> 탭으로 층을 바꾸고, <b>쌓아 보기</b>로 전체를 봐요.<br />2. 왼쪽 <b>카메라</b>를 고르면 오른쪽 아래에 미리보기가 떠요. <b>카메라로 보기</b>로 찍힐 화면을 확인해요.<br />3. 위 <b>내보내기</b>에서 이미지·스프라이트·GLB/OBJ를 만들어요.</p>
+      <p class="rs-note">1. 화면 위 <b>1F · 2F</b> 탭으로 층을 바꾸고, <b>쌓아 보기</b>로 전체를 봐요.<br />${CAMERA_ENABLED ? '2. 왼쪽 <b>카메라</b>를 고르면 오른쪽 아래에 미리보기가 떠요. <b>카메라로 보기</b>로 찍힐 화면을 확인해요.<br />3' : '2'}. 위 <b>내보내기</b>에서 이미지(지금 3D 화면)·스프라이트·GLB/OBJ를 만들어요.</p>
       <p class="rs-note">내보낸 파일은 저장 버튼으로 받아요(확인 창이 떠요). 3D 파일과 스프라이트 묶음은 ZIP으로 저장돼요.</p>
     </section>`
   }
@@ -1049,7 +1054,7 @@ function renderPanels() {
   $('rs-floors').hidden = view === 'cam' // 카메라로 보는 동안은 층 탭을 숨겨 버튼과 겹치지 않게
   const sh = $('rs-shutter')
   sh.dataset.mode = view
-  sh.hidden = stack
+  sh.hidden = stack || !CAMERA_ENABLED
   renderHint()
 }
 
@@ -1571,7 +1576,7 @@ function buildAsset(scope: 'project' | 'floor' | 'item', ascii: boolean): { root
 }
 
 function openExport(tab: 'image' | 'sprite' | '3d', camId?: string) {
-  const firstCam = camId ?? (sel?.kind === 'camera' ? sel.id : project.cameras[0]?.id)
+  const firstCam = CAMERA_ENABLED ? camId ?? (sel?.kind === 'camera' ? sel.id : project.cameras[0]?.id) : undefined
   const { el, close } = modal(`<h3>내보내기</h3>
     <div class="rs-tabs" role="tablist">
       <button role="tab" data-tab="image">이미지</button><button role="tab" data-tab="sprite">가구 스프라이트</button><button role="tab" data-tab="3d">3D 파일</button>
@@ -1600,7 +1605,7 @@ function openExport(tab: 'image' | 'sprite' | '3d', camId?: string) {
     if (t === 'image') {
       const c = camById(firstCam ?? '')
       body.innerHTML = `<div class="rs-fields">
-        <div class="rs-field"><label for="x-cam">카메라</label><select id="x-cam">${project.cameras.map((q) => opt(q.id, `${q.name} (${floorName(q.floorId)})`, firstCam ?? '')).join('')}${opt('__view', '지금 3D 화면 시점', project.cameras.length ? '' : '__view')}</select></div>
+        <div class="rs-field"><label for="x-cam">카메라</label><select id="x-cam">${CAMERA_ENABLED ? project.cameras.map((q) => opt(q.id, `${q.name} (${floorName(q.floorId)})`, firstCam ?? '')).join('') : ''}${opt('__view', '지금 3D 화면 시점', CAMERA_ENABLED && project.cameras.length ? '' : '__view')}</select></div>
         <div class="rs-field"><label for="x-fmt">형식</label><select id="x-fmt">${(Object.keys(FORMAT_NAME) as OutFormat[]).map((f) => opt(f, FORMAT_NAME[f], c?.output.format ?? 'png')).join('')}</select></div>
         <div class="rs-field"><label for="x-size">크기</label><select id="x-size">${(['HD', 'FHD', 'QHD', '4K'] as SizeName[]).map((s) => opt(s, s, c?.output.size ?? 'FHD')).join('')}</select></div>
         <div class="rs-field">${check('x-trans', '투명 배경', !!c?.output.transparent)}</div>
@@ -1751,7 +1756,7 @@ function frame() {
     }
     renderer.render(scene, camera)
     // 미리보기 창: 고른 카메라 시점 (초당 최대 10번)
-    const pc = sel?.kind === 'camera' && !stack ? camById(sel.id) : undefined
+    const pc = CAMERA_ENABLED && sel?.kind === 'camera' && !stack ? camById(sel.id) : undefined
     previewEl.hidden = !pc || pc.floorId !== project.currentFloorId
     if (pc && !previewEl.hidden) {
       const ar = aspectRatio(pc.aspect)
