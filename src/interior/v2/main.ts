@@ -32,7 +32,10 @@ const STORE_KEY = 'skela-room-v2-project'
 const GRID = 10, MOVE_SNAP = 5, EYE = 160
 const coarse = matchMedia('(pointer: coarse)').matches
 // 카메라 기능(가상 카메라·미리보기·직접 조종·찰칵)을 잠시 꺼 둔다. 코드와 저장된 카메라 데이터는 그대로 두고 화면에서만 뺀다. true로 바꾸면 다시 켜진다
-const CAMERA_ENABLED = false
+const CAMERA_ENABLED = true
+// 카메라 안에서 직접 조종(끌기·W A S D·확대)과 찰칵 버튼은 사용자 요청으로 뺀다. 카메라 목록·아이콘·미리보기·카메라로 보기 틀은 남긴다
+const PILOT_ENABLED = false
+const SHUTTER_ENABLED = false
 
 /* ───── 예시 프로젝트: 64평 복도형 1F(계단 추가) + 2F(같은 벽, 침실 위주) + 카메라 3개 ───── */
 function sampleProject(): PR.Project {
@@ -491,7 +494,7 @@ function setView(v: View) {
   camera = v === 'plan' ? ortho : persp
   grid.visible = v !== 'walk' && v !== 'cam'
   sun.castShadow = v !== 'plan'
-  padEl.hidden = v !== 'walk' && v !== 'cam'
+  padEl.hidden = v !== 'walk' && !(v === 'cam' && PILOT_ENABLED)
   frameEl.hidden = v !== 'cam'
   if (v === 'walk') {
     if (stack) { stack = false; rebuild() }
@@ -528,7 +531,7 @@ function lookThrough(id: string) {
   pilot = cloneCam(c)
   setView('cam')
   view = 'cam'
-  padEl.hidden = false
+  padEl.hidden = !PILOT_ENABLED
   frameEl.hidden = false
   ;($('rs-frame-name') as HTMLElement).textContent = `${c.name} · ${PRESETS[c.preset].label} · ${c.aspect}`
   renderPanels()
@@ -602,7 +605,7 @@ function pilotStep(dt: number) {
 let lastShot: { blob: Blob; name: string; url: string } | null = null
 let chipTimer = 0
 async function shoot() {
-  if (!CAMERA_ENABLED) return
+  if (!CAMERA_ENABLED || !SHUTTER_ENABLED) return
   if (stack) { toast('쌓아 보기에서는 찍을 수 없어요. 층을 골라주세요.'); return }
   let cam: VCamera
   if (view === 'cam' && pilot) cam = cloneCam(pilot)
@@ -736,7 +739,7 @@ const editable = () => !stack && view !== 'cam'
 viewEl.addEventListener('pointerdown', (e) => {
   if (e.target !== renderer.domElement) return
   down = { x: e.clientX, y: e.clientY }
-  if (view === 'walk' || view === 'cam') { look = { x: e.clientX, y: e.clientY }; renderer.domElement.setPointerCapture(e.pointerId); return }
+  if (view === 'walk' || (view === 'cam' && PILOT_ENABLED)) { look = { x: e.clientX, y: e.clientY }; renderer.domElement.setPointerCapture(e.pointerId); return }
   if (!editable() || tool !== 'select' || e.button !== 0 || gizmo.axis !== null || gizmo.dragging) return
   setRay(e)
   const ch = ray.intersectObjects(helpers.children, true).find((h) => h.object.userData.camPick)
@@ -765,7 +768,7 @@ viewEl.addEventListener('pointerdown', (e) => {
 
 viewEl.addEventListener('pointermove', (e) => {
   if (view === 'cam') {
-    if (look) { pilotLook(e.clientX - look.x, e.clientY - look.y); look = { x: e.clientX, y: e.clientY } }
+    if (PILOT_ENABLED && look) { pilotLook(e.clientX - look.x, e.clientY - look.y); look = { x: e.clientX, y: e.clientY } }
     return
   }
   if (view === 'walk') {
@@ -872,6 +875,7 @@ function setTool(t: Tool) {
 }
 function renderHint() {
   if (view === 'walk') { hintEl.textContent = '화면을 끌어 둘러보고, W A S D 키나 화살표 버튼으로 걸어요.'; return }
+  if (view === 'cam' && !PILOT_ENABLED) { hintEl.textContent = '카메라 시점이에요. 밝은 틀 안이 내보내기에 찍혀요. 위의 3D를 누르면 편집으로 돌아가요.'; return }
   if (view === 'cam') { hintEl.textContent = coarse ? '끌어서 둘러보고 화살표로 움직여요. −/+ 로 확대, 동그란 버튼으로 찰칵.' : '끌어서 둘러보고 W A S D로 이동, Q·E 높이, 휠로 확대. Space나 동그란 버튼으로 찰칵.'; return }
   if (stack) { hintEl.textContent = '모든 층을 쌓아서 보는 중이에요(보기 전용). 층 탭을 누르면 그 층 편집으로 돌아가요.'; return }
   const hints: Record<Tool, string> = {
@@ -1054,7 +1058,7 @@ function renderPanels() {
   $('rs-floors').hidden = view === 'cam' // 카메라로 보는 동안은 층 탭을 숨겨 버튼과 겹치지 않게
   const sh = $('rs-shutter')
   sh.dataset.mode = view
-  sh.hidden = stack || !CAMERA_ENABLED
+  sh.hidden = stack || !CAMERA_ENABLED || !SHUTTER_ENABLED
   renderHint()
 }
 
@@ -1295,20 +1299,21 @@ window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return }
   if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); redo(); return }
   if (view === 'walk') {
-    if (k === ' ') { e.preventDefault(); shoot(); return }
+    if (k === ' ' && SHUTTER_ENABLED) { e.preventDefault(); shoot(); return }
     if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { keys.add(k); e.preventDefault() }
     if (k === 'escape') setView('3d')
     return
   }
   if (view === 'cam') {
     if (k === 'escape') { setView('3d'); return }
+    if (!PILOT_ENABLED) return
     if (k === ' ') { e.preventDefault(); shoot(); return }
     if (['w', 'a', 's', 'd', 'q', 'e', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { keys.add(k); e.preventDefault() }
     if (k === '+' || k === '=') { pilotZoom(1); commitPilotSoon() }
     if (k === '-') { pilotZoom(-1); commitPilotSoon() }
     return
   }
-  if (k === ' ' && view !== 'plan') { e.preventDefault(); shoot(); return }
+  if (k === ' ' && view !== 'plan' && SHUTTER_ENABLED) { e.preventDefault(); shoot(); return }
   if (k === 'escape') { if (wallStart) endWall(); else if (tool !== 'select') setTool('select'); else select(null) }
   else if (k === 'delete' || k === 'backspace') { if (sel) { e.preventDefault(); act('del') } }
   else if (k === 'v') setTool('select')
@@ -1322,7 +1327,7 @@ window.addEventListener('keydown', (e) => {
 })
 window.addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); if (view === 'cam') commitPilotSoon() })
 viewEl.addEventListener('wheel', (e) => {
-  if (view !== 'cam') return
+  if (view !== 'cam' || !PILOT_ENABLED) return
   e.preventDefault()
   pilotZoom(e.deltaY < 0 ? 1 : -1)
   commitPilotSoon()
@@ -1727,7 +1732,7 @@ function frame() {
   renderer.setViewport(0, 0, W, H)
   if (view === 'cam' && camView) {
     previewEl.hidden = true
-    pilotStep(dt)
+    if (PILOT_ENABLED) pilotStep(dt)
     const c = pilot ?? camById(camView)
     if (c) {
       setCutawayFor(c)
