@@ -82,6 +82,8 @@ function commitProject(next: PR.Project) {
 const commit = (next: Plan) => commitProject(PR.setFloorPlan(project, project.currentFloorId, next))
 function changed() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(PR.toProjectFile(project))) } catch { /* 저장 불가면 넘어간다 */ }
+  // 카메라로 보는 중이면 속성 변경·되돌리기를 조종 중인 사본에도 반영
+  if (view === 'cam' && camView && !pilotDirty) { const c = camById(camView); if (c) pilot = cloneCam(c) }
   rebuild()
   renderPanels()
 }
@@ -149,6 +151,13 @@ root.innerHTML = `
       <button class="dn" data-move="b" aria-label="뒤로">▼</button>
       <button class="rt" data-move="r" aria-label="오른쪽">▶</button>
     </div>
+    <div class="rs-shutter" id="rs-shutter">
+      <button class="zoom" data-zoom="-1" aria-label="넓게 (축소)" title="넓게">−</button>
+      <button class="shot" id="rs-shot" aria-label="찰칵, 지금 화면 찍기" title="지금 화면 찍기 (Space)"><span></span></button>
+      <button class="zoom" data-zoom="1" aria-label="가깝게 (확대)" title="가깝게">+</button>
+    </div>
+    <div class="rs-flash" id="rs-flash" hidden></div>
+    <div class="rs-shotchip" id="rs-shotchip" hidden><img alt="방금 찍은 사진" id="rs-shotimg" /><span id="rs-shotname"></span><button class="rs-btn primary" id="rs-shotsave">다시 저장</button></div>
     <div class="rs-preview" id="rs-preview" hidden><span id="rs-preview-name"></span></div>
     <div class="rs-frame" id="rs-frame" hidden><span id="rs-frame-name"></span></div>
     <div class="rs-measure" id="rs-measure" hidden></div>
@@ -472,14 +481,14 @@ function fit() {
 let yaw = 0, pitch = 0
 function setView(v: View) {
   if (v === view) return
-  if (v !== 'cam') camView = null
+  if (v !== 'cam') { commitPilot(); camView = null; pilot = null }
   view = v
   orbit3d.enabled = v === '3d'
   orbitPlan.enabled = v === 'plan'
   camera = v === 'plan' ? ortho : persp
   grid.visible = v !== 'walk' && v !== 'cam'
   sun.castShadow = v !== 'plan'
-  padEl.hidden = v !== 'walk'
+  padEl.hidden = v !== 'walk' && v !== 'cam'
   frameEl.hidden = v !== 'cam'
   if (v === 'walk') {
     if (stack) { stack = false; rebuild() }
@@ -511,12 +520,122 @@ function lookThrough(id: string) {
   if (!c) return
   if (c.floorId !== project.currentFloorId) { project = PR.selectFloor(project, c.floorId); syncPlan(); rebuild() }
   if (stack) { stack = false; rebuild() }
+  commitPilot()
   camView = id
+  pilot = cloneCam(c)
   setView('cam')
   view = 'cam'
+  padEl.hidden = false
   frameEl.hidden = false
   ;($('rs-frame-name') as HTMLElement).textContent = `${c.name} · ${PRESETS[c.preset].label} · ${c.aspect}`
   renderPanels()
+}
+
+/* ───── 카메라 안에서 직접 조종 (카메라로 보기 상태) ───── */
+// 조종 중인 카메라는 임시 사본(pilot)에서 바꾸고, 손을 뗄 때 한 번만 저장한다 (되돌리기 한 단계)
+let pilot: VCamera | null = null
+let pilotDirty = false
+let pilotTimer = 0
+const cloneCam = (c: VCamera): VCamera => ({ ...c, pos: { ...c.pos }, target: { ...c.target }, output: { ...c.output } })
+function commitPilot() {
+  clearTimeout(pilotTimer)
+  if (!pilot || !pilotDirty) return
+  pilotDirty = false
+  commitProject(PR.upsertCamera(project, cloneCam(pilot)))
+}
+const commitPilotSoon = () => { clearTimeout(pilotTimer); pilotTimer = window.setTimeout(commitPilot, 450) }
+// 보는 방향: 원근은 카메라 자리에서 보는 점 방향, 직교는 보는 점에서 카메라 방향
+function angles(c: VCamera) {
+  const persp3 = c.projection === 'perspective'
+  const [ax, ay, ah] = persp3 ? [c.target.x - c.pos.x, c.target.y - c.pos.y, c.target.h - c.pos.h] : [c.pos.x - c.target.x, c.pos.y - c.target.y, c.pos.h - c.target.h]
+  return { yaw: Math.atan2(ay, ax), pitch: Math.atan2(ah, Math.hypot(ax, ay)), dist: Math.hypot(ax, ay, ah) || 1 }
+}
+function setAngles(c: VCamera, yawA: number, pitchA: number) {
+  const { dist } = angles(c)
+  const dx = Math.cos(pitchA) * Math.cos(yawA) * dist, dy = Math.cos(pitchA) * Math.sin(yawA) * dist, dh = Math.sin(pitchA) * dist
+  if (c.projection === 'perspective') c.target = { x: c.pos.x + dx, y: c.pos.y + dy, h: c.pos.h + dh }
+  else c.pos = { x: c.target.x + dx, y: c.target.y + dy, h: c.target.h + dh }
+}
+// 끌기: 오른쪽으로 끌면 오른쪽을 보고, 위로 끌면 위를 본다. 직교 카메라는 보는 점을 중심으로 돈다
+function pilotLook(dx: number, dy: number) {
+  if (!pilot) return
+  const a = angles(pilot)
+  if (pilot.projection === 'perspective') setAngles(pilot, a.yaw + dx * 0.004, Math.max(-1.4, Math.min(1.4, a.pitch - dy * 0.004)))
+  else setAngles(pilot, a.yaw - dx * 0.004, Math.max(0.09, Math.min(1.5706, a.pitch + dy * 0.004)))
+  pilotDirty = true
+}
+// 확대·축소: 원근은 화각, 직교는 보이는 세로 길이
+function pilotZoom(dir: number) {
+  if (!pilot) return
+  const k = dir > 0 ? 0.9 : 1 / 0.9
+  if (pilot.projection === 'perspective') pilot.fovDeg = Math.round(Math.min(100, Math.max(20, pilot.fovDeg * k)))
+  else pilot.orthoSpan = Math.round(Math.max(50, pilot.orthoSpan * k))
+  pilotDirty = true
+}
+// 이동: W·S 앞뒤, A·D 옆, Q·E 높이. 카메라와 보는 점을 같이 옮긴다
+function pilotStep(dt: number) {
+  if (!pilot) return
+  let f = 0, s = 0, u = 0
+  if (keys.has('w') || keys.has('arrowup') || padHeld.has('f')) f += 1
+  if (keys.has('s') || keys.has('arrowdown') || padHeld.has('b')) f -= 1
+  if (keys.has('d') || keys.has('arrowright') || padHeld.has('r')) s += 1
+  if (keys.has('a') || keys.has('arrowleft') || padHeld.has('l')) s -= 1
+  if (keys.has('e')) u += 1
+  if (keys.has('q')) u -= 1
+  if (!f && !s && !u) return
+  const fast = keys.has('shift') ? 2 : 1
+  const speed = (pilot.projection === 'perspective' ? 150 : pilot.orthoSpan * 0.6) * dt * fast
+  const yawA = Math.atan2(pilot.target.y - pilot.pos.y, pilot.target.x - pilot.pos.x)
+  const fx = Math.cos(yawA), fy = Math.sin(yawA) // 앞(평면도)
+  const rx = -fy, ry = fx // 오른쪽 (y가 아래인 평면도에서 앞을 시계 방향 90°)
+  const mx = (fx * f + rx * s) * speed, my = (fy * f + ry * s) * speed, mh = u * speed
+  pilot.pos = { x: pilot.pos.x + mx, y: pilot.pos.y + my, h: pilot.pos.h + mh }
+  pilot.target = { x: pilot.target.x + mx, y: pilot.target.y + my, h: pilot.target.h + mh }
+  pilotDirty = true
+  commitPilotSoon()
+}
+
+/* ───── 찰칵: 지금 보이는 장면을 바로 이미지로 ───── */
+let lastShot: { blob: Blob; name: string; url: string } | null = null
+let chipTimer = 0
+async function shoot() {
+  if (stack) { toast('쌓아 보기에서는 찍을 수 없어요. 층을 골라주세요.'); return }
+  let cam: VCamera
+  if (view === 'cam' && pilot) cam = cloneCam(pilot)
+  else {
+    const preset: Preset = view === 'plan' ? 'top' : view === 'walk' ? 'fps' : 'interior'
+    cam = makeCamera(preset, 'shot', '지금 화면', project.currentFloorId, P.planBounds(plan), '16:9')
+    grabCurrentView(cam)
+    cam.cutaway = view === 'walk' ? 'none' : 'auto'
+    cam.output = { format: 'png', transparent: false, size: 'FHD' }
+  }
+  const flash = $('rs-flash')
+  flash.hidden = false
+  setTimeout(() => { flash.hidden = true }, 260)
+  const btn = $('rs-shot') as HTMLButtonElement
+  btn.disabled = true
+  try {
+    const { w, h } = outputSize(cam.output.size, cam.aspect)
+    const fmt = cam.output.format
+    const cv = await renderImage(cam, { format: fmt, transparent: fmt !== 'jpg' && cam.output.transparent }, w, h)
+    const blob = await toBlob(cv, fmt === 'jpg' ? 'image/jpeg' : 'image/png')
+    const d = new Date(), pad = (n: number) => String(n).padStart(2, '0')
+    const stamp = `${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+    const name = fileName([project.name, floorName(cam.floorId), cam.name, stamp], fmt === 'jpg' ? 'jpg' : 'png')
+    if (lastShot) URL.revokeObjectURL(lastShot.url)
+    lastShot = { blob, name, url: URL.createObjectURL(blob) }
+    ;($('rs-shotimg') as HTMLImageElement).src = lastShot.url
+    $('rs-shotname').textContent = `${w}×${h}`
+    const chip = $('rs-shotchip')
+    chip.hidden = false
+    clearTimeout(chipTimer)
+    chipTimer = window.setTimeout(() => { chip.hidden = true }, 9000)
+    await saveFile(blob, name)
+  } catch (e) {
+    toast((e as Error).message || '찍지 못했어요.')
+  } finally {
+    btn.disabled = false
+  }
 }
 
 /* ───── 입력 ───── */
@@ -613,7 +732,7 @@ const editable = () => !stack && view !== 'cam'
 viewEl.addEventListener('pointerdown', (e) => {
   if (e.target !== renderer.domElement) return
   down = { x: e.clientX, y: e.clientY }
-  if (view === 'walk') { look = { x: e.clientX, y: e.clientY }; renderer.domElement.setPointerCapture(e.pointerId); return }
+  if (view === 'walk' || view === 'cam') { look = { x: e.clientX, y: e.clientY }; renderer.domElement.setPointerCapture(e.pointerId); return }
   if (!editable() || tool !== 'select' || e.button !== 0 || gizmo.axis !== null || gizmo.dragging) return
   setRay(e)
   const ch = ray.intersectObjects(helpers.children, true).find((h) => h.object.userData.camPick)
@@ -641,6 +760,10 @@ viewEl.addEventListener('pointerdown', (e) => {
 }, { capture: true })
 
 viewEl.addEventListener('pointermove', (e) => {
+  if (view === 'cam') {
+    if (look) { pilotLook(e.clientX - look.x, e.clientY - look.y); look = { x: e.clientX, y: e.clientY } }
+    return
+  }
   if (view === 'walk') {
     if (look) {
       yaw -= (e.clientX - look.x) * 0.005
@@ -677,6 +800,7 @@ viewEl.addEventListener('pointermove', (e) => {
 viewEl.addEventListener('pointerup', (e) => {
   const wasClick = !!down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6
   down = null; look = null
+  if (view === 'cam') { commitPilot(); return }
   if (camDrag) {
     const d = camDrag
     camDrag = null
@@ -744,7 +868,7 @@ function setTool(t: Tool) {
 }
 function renderHint() {
   if (view === 'walk') { hintEl.textContent = '화면을 끌어 둘러보고, W A S D 키나 화살표 버튼으로 걸어요.'; return }
-  if (view === 'cam') { hintEl.textContent = '카메라 시점이에요. 밝은 틀 안이 내보내기에 찍혀요. 위의 3D를 누르면 편집으로 돌아가요.'; return }
+  if (view === 'cam') { hintEl.textContent = coarse ? '끌어서 둘러보고 화살표로 움직여요. −/+ 로 확대, 동그란 버튼으로 찰칵.' : '끌어서 둘러보고 W A S D로 이동, Q·E 높이, 휠로 확대. Space나 동그란 버튼으로 찰칵.'; return }
   if (stack) { hintEl.textContent = '모든 층을 쌓아서 보는 중이에요(보기 전용). 층 탭을 누르면 그 층 편집으로 돌아가요.'; return }
   const hints: Record<Tool, string> = {
     select: view === 'plan' ? '가구를 눌러 고르고 끌어서 옮겨요. 빈 곳을 끌면 화면이 움직여요.' : '가구를 끌어 옮기고, 빈 곳을 끌면 화면이 돌아가요.',
@@ -922,6 +1046,10 @@ function renderPanels() {
   root.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)))
   viewEl.querySelectorAll<HTMLButtonElement>('[data-gizmo]').forEach((b) => b.setAttribute('aria-pressed', String(gizmoOn && b.dataset.gizmo === gizmoMode)))
   ;($('rs-tools') as HTMLElement).hidden = !editable() || view === 'walk'
+  $('rs-floors').hidden = view === 'cam' // 카메라로 보는 동안은 층 탭을 숨겨 버튼과 겹치지 않게
+  const sh = $('rs-shutter')
+  sh.dataset.mode = view
+  sh.hidden = stack
   renderHint()
 }
 
@@ -1138,6 +1266,9 @@ root.addEventListener('click', (e) => {
   else if (t.id === 'rs-fit') fit()
   else if (t.id === 'rs-file') openFile()
   else if (t.id === 'rs-export') openExport('image')
+  else if (t.id === 'rs-shot') shoot()
+  else if (t.id === 'rs-shotsave') { if (lastShot) saveFile(lastShot.blob, lastShot.name) }
+  else if (d.zoom) { pilotZoom(Number(d.zoom)); commitPilotSoon() }
 })
 $('rs-right').addEventListener('change', (e) => { const t = e.target as HTMLInputElement; if (t.id) onField(t.id, t.value, t.checked) })
 $('rs-template').addEventListener('change', (e) => {
@@ -1159,11 +1290,20 @@ window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return }
   if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); redo(); return }
   if (view === 'walk') {
+    if (k === ' ') { e.preventDefault(); shoot(); return }
     if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { keys.add(k); e.preventDefault() }
     if (k === 'escape') setView('3d')
     return
   }
-  if (view === 'cam' && k === 'escape') { setView('3d'); return }
+  if (view === 'cam') {
+    if (k === 'escape') { setView('3d'); return }
+    if (k === ' ') { e.preventDefault(); shoot(); return }
+    if (['w', 'a', 's', 'd', 'q', 'e', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { keys.add(k); e.preventDefault() }
+    if (k === '+' || k === '=') { pilotZoom(1); commitPilotSoon() }
+    if (k === '-') { pilotZoom(-1); commitPilotSoon() }
+    return
+  }
+  if (k === ' ' && view !== 'plan') { e.preventDefault(); shoot(); return }
   if (k === 'escape') { if (wallStart) endWall(); else if (tool !== 'select') setTool('select'); else select(null) }
   else if (k === 'delete' || k === 'backspace') { if (sel) { e.preventDefault(); act('del') } }
   else if (k === 'v') setTool('select')
@@ -1175,7 +1315,13 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'r') act('rot90')
   else if (k === 'f') fit()
 })
-window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()))
+window.addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); if (view === 'cam') commitPilotSoon() })
+viewEl.addEventListener('wheel', (e) => {
+  if (view !== 'cam') return
+  e.preventDefault()
+  pilotZoom(e.deltaY < 0 ? 1 : -1)
+  commitPilotSoon()
+}, { passive: false })
 window.addEventListener('blur', () => { keys.clear(); padHeld.clear() })
 
 /* ───── 모달 공통 ───── */
@@ -1576,7 +1722,8 @@ function frame() {
   renderer.setViewport(0, 0, W, H)
   if (view === 'cam' && camView) {
     previewEl.hidden = true
-    const c = camById(camView)
+    pilotStep(dt)
+    const c = pilot ?? camById(camView)
     if (c) {
       setCutawayFor(c)
       const fr = frameRect(c, W, H)
