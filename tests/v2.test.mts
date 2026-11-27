@@ -214,7 +214,16 @@ test('예시 4층 집: 층마다 다르게 꾸며지고, 가구가 벽·복도·
   const doorsOn = (i: number, wall: string) => pr.floors[i].plan.openings.filter((o) => o.wallId === wall && o.kind === 'door')
   assert.equal(doorsOn(1, 'wall8').length, 0, '2층 드레스룸 복도 문 없음')
   assert.equal(doorsOn(1, 'wall13').length, 2, '2층 안방 벽: 입구 + 드레스룸 문')
-  for (const i of [0, 2, 3]) { assert.equal(doorsOn(i, 'wall8').length, 1); assert.equal(doorsOn(i, 'wall13').length, 1) }
+  for (const i of [0, 2, 3]) assert.equal(doorsOn(i, 'wall8').length, 1)
+  for (const i of [0, 2]) assert.equal(doorsOn(i, 'wall13').length, 1)
+  // 4층: 안방 욕실이 세탁실 벽(x=1760)에 붙고, 세탁실로 통하는 문 + 안방에서 들어가는 문
+  const bath4 = pr.floors[3].plan.walls.find((w) => w.id === 'wall19')!
+  assert.equal(Math.min(bath4.a.x, bath4.b.x), 1760, '4층 욕실이 세탁실 쪽 벽에 붙는다')
+  assert.equal(doorsOn(3, 'wall13').length, 2, '4층 안방 벽: 입구 + 욕실→세탁실 문')
+  assert.equal(doorsOn(3, 'wall19').length, 1, '4층 안방→욕실 문')
+  const t4 = pr.floors[3].plan.furniture.filter((f) => f.type === 'toilet' || f.type === 'bathtub')
+  assert.ok(t4.filter((f) => f.x > 1760).every((f) => f.x < 2000 && f.y > 702), '4층 안방 욕실 기구가 새 욕실 안에 있다')
+  assert.ok(!pr.floors[3].plan.furniture.some((f) => f.type === 'wardrobe' && f.x > 1760), '4층 안방에 홀로 선 옷장 없음')
   // 싱크대(주방 조리대)는 층마다 한 곳까지 (4층 세탁실은 세탁기·건조기)
   for (const fl of pr.floors) assert.ok(fl.plan.furniture.filter((f) => f.type === 'counter').length <= 2 && new Set(fl.plan.furniture.filter((f) => f.type === 'counter').map((f) => f.y > 561 && f.x < 1400 ? 'kitchen' : 'other')).size <= 1, `${fl.name} 싱크대가 여러 곳`)
   assert.ok(pr.floors[3].plan.furniture.some((f) => f.type === 'washer') && pr.floors[3].plan.furniture.some((f) => f.type === 'dryer'), '4층 세탁실에 세탁기·건조기')

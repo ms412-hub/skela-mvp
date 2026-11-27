@@ -27,11 +27,14 @@ function furnish(base: Plan, name: string, floorColor: string, wallColor: string
 }
 
 // 욕실 세 곳은 모든 층이 같다 (벽이 같으므로)
-const BATHS: Item[] = [
+const SHARED_BATHS: Item[] = [
   ['tile', 440, 300, 0, { w: 210, d: 191 }], ['toilet', 511, 250, 90], ['basin', 420, 228], ['bathtub', 440, 358],
   ['tile', 440, 761, 0, { w: 210, d: 391 }], ['toilet', 511, 680, 90], ['basin', 358, 640, 270], ['bathtub', 440, 918],
-  ['tile', 2080, 832, 0, { w: 230, d: 250 }], ['bathtub', 2105, 920], ['toilet', 2161, 760, 90], ['basin', 2040, 730],
 ]
+const MASTER_BATH: Item[] = [['tile', 2080, 832, 0, { w: 230, d: 250 }], ['bathtub', 2105, 920], ['toilet', 2161, 760, 90], ['basin', 2040, 730]]
+const BATHS: Item[] = [...SHARED_BATHS, ...MASTER_BATH]
+// 4층 안방 욕실: 세탁실 쪽 벽(x=1760)에 붙여 1760~2000 × 702~962로 옮긴다. 문은 위(안방 쪽, x=1950)와 왼쪽(세탁실 쪽, y=760)
+const MASTER_BATH_4F: Item[] = [['tile', 1880, 832, 0, { w: 230, d: 250 }], ['bathtub', 1880, 920], ['toilet', 1961, 800, 90], ['basin', 1830, 730]]
 // 계단: 거실 왼쪽 벽을 따라, 복도 쪽(아래)에서 올라가기 시작해 위쪽으로 오른다. 창문을 가리지 않는다
 const STAIRS: Item = ['stairs', 605, 140, 0]
 
@@ -95,7 +98,7 @@ const WORK: Item[] = [
 
 // 4F 휴식·게스트 층: 홈시어터, 바·카페, 게스트룸 2, 요가실, 세탁실, 스위트룸
 const LEISURE: Item[] = [
-  STAIRS, ...BATHS,
+  STAIRS, ...SHARED_BATHS, ...MASTER_BATH_4F,
   // 게스트룸 1 (둘째 방)
   ['bed', 165, 118, 0, {}, '#5f7a8c'], ['wardrobe', 440, 33], ['plant', 290, 40],
   // 게스트룸 2 (방3): 싱글 침대 두 개
@@ -114,12 +117,13 @@ const LEISURE: Item[] = [
   // 요가·명상실 (방4)
   ['rug', 1580, 200, 0, { w: 240, d: 180 }, '#7c9a6d'], ['plant', 1430, 40], ['plant', 1730, 40], ['plant', 1430, 350], ['plant', 1730, 350],
   // 세탁실 (방5)
-  // 오른쪽 벽에 세탁기·건조기 나란히 (싱크대는 바·카페 한 곳만), 왼쪽 벽 세제 선반, 창 아래 낮은 수납
-  ['floortile', 1580, 761, 0, { w: 350, d: 391 }, '#cfd6d8'], ['washer', 1725, 700, 90], ['dryer', 1725, 765, 90],
+  // 세탁실: 오른쪽 벽에 욕실로 통하는 문(y=760)이 생겨서, 세탁기·건조기는 창 아래(아래쪽 벽)에 나란히. 싱크대는 바·카페 한 곳만
+  ['floortile', 1580, 761, 0, { w: 350, d: 391 }, '#cfd6d8'], ['washer', 1600, 927, 180], ['dryer', 1665, 927, 180],
   ['bookshelf', 1420, 760, 270, { h: 120 }, '#e8e8e4'], ['bookshelf', 1500, 940, 180],
   // 스위트룸 (안방)
   ['bed', 1868, 200, 270, {}, '#ece4d6'], ['sofa', 2150, 450, 90, {}, '#4f6d8f'], ['rug', 2040, 450, 0, { w: 160, d: 120 }, '#d9c7a7'],
-  ['wardrobe', 1860, 660], ['plant', 2170, 640], ['plant', 2110, 650], ['plant', 2030, 655], ['plant', 1990, 600],
+  // 욕실이 비운 안쪽 구석은 화분 코너 (가운데 홀로 서 있던 옷장은 뺌)
+  ['plant', 2165, 750], ['plant', 2165, 835], ['plant', 2165, 920], ['plant', 2090, 925], ['plant', 2050, 640],
 ]
 
 // 2층만: 드레스룸(방5)의 복도 쪽 문(wall8)을 없애고, 안방과 사이 벽(wall13)에 문을 낸다 (안방 입구 y=481보다 안쪽 y=820)
@@ -131,10 +135,22 @@ function walkInCloset(p: Plan): Plan {
   return w ? P.addOpening(q, 'wall13', (DRESSROOM_DOOR_Y - w.a.y) / (w.b.y - w.a.y), 'door') : q
 }
 
+// 4층만: 안방 욕실 벽을 세탁실 쪽으로 옮기고, 욕실→세탁실 문과 안방→욕실 문을 낸다
+export const LAUNDRY_DOOR_Y = 760
+function bathToLaundry(p: Plan): Plan {
+  let q = p
+  for (const o of q.openings.filter((o) => o.wallId === 'wall20' || o.wallId === 'wall19')) q = P.removeOpening(q, o.id)
+  q = P.updateWall(q, 'wall19', { a: { x: 1760, y: 702 }, b: { x: 2000, y: 702 } })
+  q = P.updateWall(q, 'wall20', { a: { x: 2000, y: 702 }, b: { x: 2000, y: 962 } })
+  q = P.addOpening(q, 'wall19', (1950 - 1760) / 240, 'door') // 안방 → 욕실
+  const w13 = q.walls.find((w) => w.id === 'wall13')
+  return w13 ? P.addOpening(q, 'wall13', (LAUNDRY_DOOR_Y - w13.a.y) / (w13.b.y - w13.a.y), 'door') : q // 욕실 → 세탁실
+}
+
 export const SAMPLE_FLOORS: { name: string; theme: string; floorColor: string; wallColor: string; items: Item[]; edit?: (p: Plan) => Plan }[] = [
   { name: '2F', theme: '가족 층', floorColor: '#b8916a', wallColor: '#efe9df', items: FAMILY, edit: walkInCloset },
   { name: '3F', theme: '작업·취미 층', floorColor: '#cb9a68', wallColor: '#fbf6ee', items: WORK },
-  { name: '4F', theme: '휴식·게스트 층', floorColor: '#c7b08c', wallColor: '#f3efe6', items: LEISURE },
+  { name: '4F', theme: '휴식·게스트 층', floorColor: '#c7b08c', wallColor: '#f3efe6', items: LEISURE, edit: bathToLaundry },
 ]
 
 export function sampleProject(): PR.Project {
