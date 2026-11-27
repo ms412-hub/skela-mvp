@@ -19,6 +19,7 @@ import { CATALOG_V2, CATEGORY_NAME, furnitureTypeV2, type Category } from './cat
 import { buildBoxesV2, cutawayWalls, furnitureBoxesV2, isVisible, type FurnitureV2 } from './scene2.ts'
 import { ASPECTS, PRESETS, PRESET_ORDER, aspectRatio, cameraBasis, fitOrthoSpan, makeCamera, toThree, type Aspect, type OutFormat, type Preset, type SizeName, type VCamera } from './camera.ts'
 import * as PR from './project.ts'
+import { sampleProject } from './sample.ts'
 import { alphaBounds, asciiName, fileName, mtlText, outputSize, tiles, TILE_MAX } from './exportJob.ts'
 import { makeZip, type ZipEntry } from './zip.ts'
 import '../studio/studio.css'
@@ -28,7 +29,9 @@ type Sel = { kind: 'furniture' | 'wall' | 'opening' | 'camera'; id: string } | n
 type Tool = 'select' | 'wall' | 'door' | 'window'
 type View = 'plan' | '3d' | 'walk' | 'cam'
 
-const STORE_KEY = 'skela-room-v2-project'
+// 예시 집을 바꾸면 r 번호를 올려 새 예시로 열리게 한다. 예전 칸(OLD_STORE_KEYS)의 작업은 지우지 않고 '예전 작업 불러오기'로 연다
+const STORE_KEY = 'skela-room-v2-project-r2'
+const OLD_STORE_KEYS = ['skela-room-v2-project']
 const GRID = 10, MOVE_SNAP = 5, EYE = 160
 const coarse = matchMedia('(pointer: coarse)').matches
 // 카메라 기능(가상 카메라·미리보기·직접 조종·찰칵)을 잠시 꺼 둔다. 코드와 저장된 카메라 데이터는 그대로 두고 화면에서만 뺀다. true로 바꾸면 다시 켜진다
@@ -36,27 +39,6 @@ const CAMERA_ENABLED = true
 // 카메라 안에서 직접 조종(끌기·W A S D·확대)과 찰칵 버튼은 사용자 요청으로 뺀다. 카메라 목록·아이콘·미리보기·카메라로 보기 틀은 남긴다
 const PILOT_ENABLED = false
 const SHUTTER_ENABLED = false
-
-/* ───── 예시 프로젝트: 64평 복도형 1F(계단 추가) + 2F(같은 벽, 침실 위주) + 카메라 3개 ───── */
-function sampleProject(): PR.Project {
-  let p1 = findTemplate('corridor64')!.build()
-  const st = furnitureTypeV2('stairs')!
-  p1 = P.addFurniture(p1, 'stairs', 720, 62, st)
-  p1 = P.updateFurniture(p1, p1.furniture[p1.furniture.length - 1].id, { rot: 90 })
-  let pr = PR.newProject(p1, '복도형 64평 (2층)')
-  pr = PR.duplicateFloor(pr, 'floor1')
-  const keep = new Set(['bed', 'wardrobe', 'desk', 'chair', 'bookshelf', 'stairs', 'toilet', 'basin', 'bathtub', 'tile', 'rug', 'sofa', 'table', 'plant'])
-  const f2 = pr.floors[1]
-  pr = PR.setFloorPlan(pr, f2.id, { ...f2.plan, name: '2F', floorColor: '#9c7b5a', furniture: f2.plan.furniture.filter((f) => keep.has(f.type) && !(f.x > 550 && f.x < 1400 && f.y > 561)) })
-  const room = P.planBounds(p1)
-  const living = makeCamera('interior', 'cam1', '거실 인테리어', 'floor1', room, '3:2')
-  living.pos = { x: 1290, y: 520, h: 150 }
-  living.target = { x: 880, y: 140, h: 105 }
-  pr = PR.upsertCamera(pr, living)
-  pr = PR.upsertCamera(pr, makeCamera('iso', 'cam2', '1층 아이소', 'floor1', room, '16:9'))
-  pr = PR.upsertCamera(pr, makeCamera('illust', 'cam3', '2층 게임 일러스트', f2.id, room, '16:9'))
-  return { ...pr, currentFloorId: 'floor1' }
-}
 
 /* ───── 상태 ───── */
 function loadSaved(): PR.Project | null {
@@ -1351,12 +1333,26 @@ function openFile() {
   const { el, close } = modal(`<h3>저장 · 불러오기</h3>
     <p class="rs-note">작업은 이 브라우저에 자동 저장돼요(기존 Skela Room과 따로). 예전 Skela Room에서 복사한 평면도도 붙여넣으면 1F로 바꿔서 열어요.</p>
     <textarea id="rs-json" spellcheck="false">${esc(JSON.stringify(PR.toProjectFile(project)))}</textarea>
-    <div class="rs-row"><button class="rs-btn primary" id="rs-copy">복사</button><button class="rs-btn" id="rs-apply">붙여넣은 내용 불러오기</button><button class="rs-btn" id="rs-sample">예시 프로젝트로</button><span class="rs-spacer"></span><button class="rs-btn" id="rs-close">닫기</button></div>
+    <div class="rs-row"><button class="rs-btn primary" id="rs-copy">복사</button><button class="rs-btn" id="rs-apply">붙여넣은 내용 불러오기</button><button class="rs-btn" id="rs-sample">예시 프로젝트로</button>${OLD_STORE_KEYS.some((k) => { try { return !!localStorage.getItem(k) } catch { return false } }) ? '<button class="rs-btn" id="rs-old">예전 작업 불러오기</button>' : ''}<span class="rs-spacer"></span><button class="rs-btn" id="rs-close">닫기</button></div>
     <p class="rs-err" id="rs-err" hidden></p>`)
   const ta = el.querySelector('#rs-json') as HTMLTextAreaElement
   const err = el.querySelector('#rs-err') as HTMLElement
   el.querySelector('#rs-close')?.addEventListener('click', close)
   el.querySelector('#rs-copy')?.addEventListener('click', () => navigator.clipboard.writeText(ta.value).then(() => toast('복사했어요.'), () => { ta.focus(); ta.select(); toast('선택해 두었어요. Ctrl+C로 복사하세요.') }))
+  el.querySelector('#rs-old')?.addEventListener('click', () => {
+    for (const k of OLD_STORE_KEYS) {
+      try {
+        const raw = localStorage.getItem(k)
+        if (!raw) continue
+        const { project: p } = PR.fromAnyFile(JSON.parse(raw))
+        sel = null; stack = false
+        commitProject(p); fit(); close()
+        toast('예전 작업을 불러왔어요. 되돌리기로 예시 집으로 돌아갈 수 있어요.')
+        return
+      } catch { /* 다음 칸 */ }
+    }
+    toast('불러올 예전 작업이 없어요.')
+  })
   el.querySelector('#rs-sample')?.addEventListener('click', () => { sel = null; stack = false; commitProject(sampleProject()); fit(); close(); toast('예시 프로젝트를 열었어요. 되돌리기로 돌아갈 수 있어요.') })
   el.querySelector('#rs-apply')?.addEventListener('click', () => {
     try {

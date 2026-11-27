@@ -174,3 +174,41 @@ test('ZIP: CRC32 값이 표준과 같고, 묶은 파일을 그대로 다시 꺼�
   assert.deepEqual([...back[0].data], [...files[0].data])
   assert.equal(new TextDecoder().decode(back[1].data), '1 = 1m')
 })
+
+test('예시 4층 집: 층마다 다르게 꾸며지고, 가구가 벽·복도·서로를 침범하지 않는다', async () => {
+  const { sampleProject } = await import('../src/interior/v2/sample.ts')
+  const pr = sampleProject()
+  assert.deepEqual(pr.floors.map((f) => f.name), ['1F', '2F', '3F', '4F'])
+  const flat = new Set(['rug', 'tile', 'floortile', 'pendant', 'upper'])
+  const box = (f: { x: number; y: number; w: number; d: number; rot: number }, shrink = 0) => {
+    const turned = f.rot % 180 !== 0
+    const ex = (turned ? f.d : f.w) / 2 - shrink, ey = (turned ? f.w : f.d) / 2 - shrink
+    return { x0: f.x - ex, x1: f.x + ex, y0: f.y - ey, y1: f.y + ey }
+  }
+  const hit = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1
+  const signatures = new Set<string>()
+  for (const fl of pr.floors) {
+    const items = fl.plan.furniture
+    assert.ok(items.length >= 30, `${fl.name}: 가구 ${items.length}개`)
+    signatures.add(items.map((f) => `${f.type}@${f.x},${f.y}`).sort().join('|'))
+    for (const f of items) {
+      const b = box(f)
+      assert.ok(b.x0 >= 0 && b.x1 <= 2200 && b.y0 >= 0 && b.y1 <= 962, `${fl.name} ${f.type}(${f.x},${f.y}) 집 밖`)
+      if (f.type === 'stairs') continue
+      assert.ok(!hit(box(f, 1), { x0: 0, x1: 1760, y0: 404, y1: 558 }), `${fl.name} ${f.type}(${f.x},${f.y})가 복도를 막는다`)
+      // 벽(두께 10)을 뚫지 않는다
+      for (const w of fl.plan.walls) {
+        const wb = { x0: Math.min(w.a.x, w.b.x) - 5, x1: Math.max(w.a.x, w.b.x) + 5, y0: Math.min(w.a.y, w.b.y) - 5, y1: Math.max(w.a.y, w.b.y) + 5 }
+        assert.ok(!hit(box(f, 1), wb), `${fl.name} ${f.type}(${f.x},${f.y})가 ${w.id}를 뚫는다`)
+      }
+    }
+    const solid = items.filter((f) => !flat.has(f.type))
+    for (let i = 0; i < solid.length; i++) for (let j = i + 1; j < solid.length; j++) {
+      const a = solid[i], c = solid[j]
+      if ((a.type === 'table' || c.type === 'table') && (a.type === 'rug' || c.type === 'rug')) continue
+      assert.ok(!hit(box(a, 2), box(c, 2)), `${fl.name}: ${a.type}(${a.x},${a.y}) ↔ ${c.type}(${c.x},${c.y}) 겹침`)
+    }
+  }
+  assert.equal(signatures.size, 4, '네 층의 배치가 모두 다르다')
+  assert.notEqual(pr.floors[1].plan.floorColor, pr.floors[2].plan.floorColor)
+})

@@ -1,0 +1,133 @@
+// v2 예시 프로젝트: 복도형 64평 4층 집. 벽 구조는 1층과 같고 층마다 쓰임새·색이 다르다. 화면 API 없음(테스트 대상).
+//
+// 방 위치 (복도형 64평 벽 그대로, 단위 cm):
+//   둘째 방 0~550 × 0~401 (욕실 330~550 × 200~401) · 방3 0~330 × 561~962 · 공용 욕실 330~550 × 561~962
+//   가운데 위 550~1400 × 0~401 (복도와 트임) · 가운데 아래 550~1400 × 561~962 (위쪽 850~1100 트임)
+//   방4 1400~1760 × 0~401 · 방5 1400~1760 × 561~962 · 안방 1760~2200 × 0~962 (욕실 1960~2200 × 702~962)
+//   복도 y 401~561 (현관 쪽 x 0~550, 안방 쪽 1400~1760, 가운데는 트인 통로) — 가구를 두지 않는다
+import type { Plan } from '../Plan.ts'
+import * as P from '../Plan.ts'
+import { findTemplate } from '../templates.ts'
+import { furnitureTypeV2 } from './catalog2.ts'
+import { makeCamera } from './camera.ts'
+import * as PR from './project.ts'
+
+type Item = [type: string, x: number, y: number, rot?: number, size?: { w?: number; d?: number; h?: number }, color?: string]
+
+function furnish(base: Plan, name: string, floorColor: string, wallColor: string, items: Item[]): Plan {
+  let p: Plan = { ...base, name, floorColor, wallColor, furniture: [] }
+  for (const [type, x, y, rot = 0, size, color] of items) {
+    const t = furnitureTypeV2(type)
+    if (!t) continue
+    p = P.addFurniture(p, type, x, y, t)
+    const id = p.furniture[p.furniture.length - 1].id
+    p = P.updateFurniture(p, id, { rot, ...size, ...(color ? { color } : {}) })
+  }
+  return p
+}
+
+// 욕실 세 곳은 모든 층이 같다 (벽이 같으므로)
+const BATHS: Item[] = [
+  ['tile', 440, 300, 0, { w: 210, d: 191 }], ['toilet', 511, 250, 90], ['basin', 420, 228], ['bathtub', 440, 358],
+  ['tile', 440, 761, 0, { w: 210, d: 391 }], ['toilet', 511, 680, 90], ['basin', 358, 640, 270], ['bathtub', 440, 918],
+  ['tile', 2080, 832, 0, { w: 230, d: 250 }], ['bathtub', 2105, 920], ['toilet', 2161, 760, 90], ['basin', 2040, 730],
+]
+const STAIRS: Item = ['stairs', 720, 62, 90]
+
+// 2F 가족 층: 아이방 2, 가족 라운지, 놀이방·식당, 서재, 드레스룸, 부부 침실
+const FAMILY: Item[] = [
+  STAIRS, ...BATHS,
+  // 아이방 1 (둘째 방)
+  ['bed', 110, 110, 0, { w: 100, d: 200 }, '#e9a6a1'], ['desk', 400, 35, 180], ['chair', 400, 92, 180], ['rug', 230, 300, 0, { w: 120, d: 90 }, '#f2c14e'], ['plant', 290, 40],
+  // 아이방 2 (방3)
+  ['bed', 65, 855, 180, { w: 100, d: 200 }, '#7fb3d5'], ['desk', 295, 700, 270], ['chair', 240, 700, 270], ['bookshelf', 220, 940, 180],
+  // 가족 라운지 (가운데 위)
+  ['tv', 975, 25], ['rug', 975, 170, 0, {}, '#5d7a8c'], ['table', 975, 170], ['sofa', 975, 300, 180, {}, '#c9875a'],
+  ['chair', 820, 170, 270], ['chair', 1130, 170, 90], ['bookshelf', 570, 250, 270], ['bookshelf', 1380, 150, 90], ['plant', 1300, 40],
+  // 놀이방 + 가족 식당 (가운데 아래)
+  ['rug', 720, 800, 0, {}, '#d9a441'], ['table', 720, 800, 0, { w: 60, d: 60, h: 40 }], ['bookshelf', 620, 940, 180], ['bookshelf', 710, 940, 180],
+  ['dining', 1100, 760], ['chair', 1070, 695], ['chair', 1130, 695], ['chair', 1070, 825, 180], ['chair', 1130, 825, 180], ['plant', 1340, 920],
+  // 서재 (방4)
+  ['desk', 1580, 35, 180], ['chair', 1580, 92, 180], ['bookshelf', 1420, 300, 270], ['bookshelf', 1740, 300, 90],
+  // 드레스룸 (방5)
+  ['wardrobe', 1433, 640, 270], ['wardrobe', 1433, 760, 270], ['wardrobe', 1727, 640, 90], ['wardrobe', 1727, 760, 90], ['rug', 1580, 840, 0, { w: 120, d: 80 }, '#b9a7c9'],
+  // 부부 침실 (안방)
+  ['bed', 1980, 120, 0, {}, '#6c5b4f'], ['wardrobe', 1793, 150, 270], ['wardrobe', 1793, 270, 270], ['desk', 2165, 450, 270], ['chair', 2110, 450, 270],
+  ['rug', 1980, 330, 0, {}, '#a8b5a0'], ['plant', 2170, 650],
+]
+
+// 3F 작업·취미 층: 오픈 오피스, 회의실, 작업실, 음악실, 게임방, 수납실, 큰 서재
+const WORK: Item[] = [
+  STAIRS, ...BATHS,
+  // 작업실 (둘째 방)
+  ['desk', 165, 40, 180, { w: 200, d: 70 }], ['chair', 165, 105, 180], ['bookshelf', 20, 300, 270], ['table', 165, 300, 0, { w: 120, d: 60, h: 90 }, '#8a8f94'],
+  // 음악실 (방3)
+  ['sofa', 50, 760, 270, { w: 160 }, '#3f5f7a'], ['rug', 190, 760, 0, { w: 140, d: 160 }, '#c35d4a'], ['table', 190, 760, 0, { w: 60, d: 60 }], ['bookshelf', 260, 940, 180],
+  // 오픈 오피스 (가운데 위): 책상 4개가 마주 보는 섬
+  ['desk', 880, 150], ['desk', 1080, 150], ['desk', 880, 210, 180], ['desk', 1080, 210, 180],
+  ['chair', 880, 95], ['chair', 1080, 95], ['chair', 880, 265, 180], ['chair', 1080, 265, 180],
+  ['bookshelf', 570, 250, 270], ['bookshelf', 1380, 150, 90], ['bookshelf', 1380, 250, 90], ['plant', 1300, 40], ['plant', 620, 340],
+  // 회의실 (가운데 아래): 6인 테이블 + 화면
+  ['dining', 975, 790, 0, { w: 240, d: 100 }, '#d8d2c6'],
+  ['chair', 915, 712], ['chair', 975, 712], ['chair', 1035, 712], ['chair', 915, 868, 180], ['chair', 975, 868, 180], ['chair', 1035, 868, 180],
+  ['tv', 1375, 790, 90], ['bookshelf', 575, 760, 270], ['plant', 600, 920],
+  // 게임방 (방4)
+  ['tv', 1735, 200, 90], ['sofa', 1460, 200, 270, {}, '#7a4a8c'], ['rug', 1600, 200, 0, { w: 140, d: 200 }, '#2f3b4a'], ['plant', 1440, 360],
+  // 수납실 (방5)
+  ['bookshelf', 1460, 940, 180], ['bookshelf', 1560, 940, 180], ['bookshelf', 1660, 940, 180], ['wardrobe', 1433, 680, 270],
+  // 큰 서재 (안방)
+  ['bookshelf', 2180, 100, 90], ['bookshelf', 2180, 180, 90], ['bookshelf', 2180, 420, 90], ['bookshelf', 2180, 500, 90],
+  ['desk', 1980, 35, 180, { w: 160 }], ['chair', 1980, 92, 180], ['sofa', 1960, 600, 180, {}, '#8c6a4a'], ['rug', 1960, 420, 0, {}, '#9aa58c'], ['table', 1960, 420],
+  ['plant', 1800, 650],
+]
+
+// 4F 휴식·게스트 층: 홈시어터, 바·카페, 게스트룸 2, 요가실, 세탁실, 스위트룸
+const LEISURE: Item[] = [
+  STAIRS, ...BATHS,
+  // 게스트룸 1 (둘째 방)
+  ['bed', 165, 118, 0, {}, '#5f7a8c'], ['wardrobe', 440, 33], ['plant', 290, 40],
+  // 게스트룸 2 (방3): 싱글 침대 두 개
+  ['bed', 65, 855, 180, { w: 100, d: 200 }, '#c9b38f'], ['bed', 195, 855, 180, { w: 100, d: 200 }, '#c9b38f'], ['plant', 295, 600],
+  // 홈시어터 (가운데 위)
+  ['tv', 975, 25, 0, { w: 240 }], ['rug', 975, 170, 0, { w: 300, d: 200 }, '#3c4a5c'], ['table', 975, 170],
+  ['sofa', 900, 300, 180, {}, '#9c3d3d'], ['sofa', 1100, 300, 180, {}, '#9c3d3d'], ['plant', 1360, 40], ['plant', 1360, 340], ['plant', 600, 350],
+  // 바·카페 (가운데 아래)
+  ['island', 975, 760], ['stool', 920, 695], ['stool', 975, 695], ['stool', 1030, 695],
+  ['pendant', 915, 760], ['pendant', 975, 760], ['pendant', 1035, 760],
+  ['counter', 1240, 927, 180], ['upper', 1240, 940, 180], ['fridge', 600, 920, 180],
+  ['dining', 700, 790, 0, { w: 90, d: 90 }], ['chair', 700, 722], ['chair', 700, 858, 180], ['plant', 600, 600],
+  // 요가·명상실 (방4)
+  ['rug', 1580, 200, 0, { w: 240, d: 180 }, '#7c9a6d'], ['plant', 1430, 40], ['plant', 1730, 40], ['plant', 1430, 350], ['plant', 1730, 350],
+  // 세탁실 (방5)
+  ['floortile', 1580, 761, 0, { w: 350, d: 391 }, '#cfd6d8'], ['counter', 1725, 760, 90], ['basin', 1428, 760, 270], ['bookshelf', 1500, 940, 180],
+  // 스위트룸 (안방)
+  ['bed', 1868, 200, 270, {}, '#ece4d6'], ['sofa', 2150, 450, 90, {}, '#4f6d8f'], ['rug', 2040, 450, 0, {}, '#d9c7a7'], ['table', 2040, 450],
+  ['wardrobe', 1860, 660], ['plant', 2170, 650],
+]
+
+export const SAMPLE_FLOORS = [
+  { name: '2F', theme: '가족 층', floorColor: '#b8916a', wallColor: '#efe9df', items: FAMILY },
+  { name: '3F', theme: '작업·취미 층', floorColor: '#a9a59c', wallColor: '#e6e8e6', items: WORK },
+  { name: '4F', theme: '휴식·게스트 층', floorColor: '#c7b08c', wallColor: '#f3efe6', items: LEISURE },
+]
+
+export function sampleProject(): PR.Project {
+  let p1 = findTemplate('corridor64')!.build()
+  p1 = P.addFurniture(p1, 'stairs', 720, 62, furnitureTypeV2('stairs')!)
+  p1 = P.updateFurniture(p1, p1.furniture[p1.furniture.length - 1].id, { rot: 90 })
+  let pr = PR.newProject({ ...p1, name: '1F' }, '복도형 64평 (4층)')
+  for (const f of SAMPLE_FLOORS) {
+    pr = PR.addFloor(PR.selectFloor(pr, pr.floors[pr.floors.length - 1].id))
+    const fl = pr.floors[pr.floors.length - 1]
+    pr = PR.setFloorPlan(pr, fl.id, furnish(p1, f.name, f.floorColor, f.wallColor, f.items))
+    pr = PR.renameFloor(pr, fl.id, f.name)
+  }
+  const room = P.planBounds(p1)
+  const living = makeCamera('interior', 'cam1', '거실 인테리어', 'floor1', room, '3:2')
+  living.pos = { x: 1290, y: 520, h: 150 }
+  living.target = { x: 880, y: 140, h: 105 }
+  pr = PR.upsertCamera(pr, living)
+  pr = PR.upsertCamera(pr, makeCamera('iso', 'cam2', '1층 아이소', 'floor1', room, '16:9'))
+  pr = PR.upsertCamera(pr, makeCamera('illust', 'cam3', '2층 게임 일러스트', pr.floors[1].id, room, '16:9'))
+  return { ...pr, currentFloorId: 'floor1' }
+}
