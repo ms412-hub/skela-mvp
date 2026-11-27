@@ -235,6 +235,11 @@ type Ref = { kind: 'furniture' | 'wall' | 'opening' | 'floor'; id: string }
 type WallFade = { mesh: THREE.Mesh; wallId: string; px: number; pz: number; nx: number; nz: number; inside: number; faded: boolean }
 let wallFades: WallFade[] = []
 let wallSolids: { cx: number; cz: number; hw: number; hd: number; c: number; s: number }[] = []
+// 자동문: 문짝을 경첩(문 한쪽 끝) 축의 묶음(pivot)에 넣어 돌린다. 걷기 모드에서 가까이 가면 열린다
+type DoorLeaf = { pivot: THREE.Group; cx: number; cz: number; nx: number; nz: number; base: number; open: number; swing: number }
+let doorLeaves: DoorLeaf[] = []
+const DOOR_OPEN_DIST = 130 // cm: 이 안으로 오면 열린다
+const DOOR_OPEN_ANGLE = (85 * Math.PI) / 180
 
 function disposeGroup(g: THREE.Object3D) {
   g.traverse((o) => {
@@ -281,6 +286,20 @@ function addBoxes(target: THREE.Group, p: Plan, boxes: SceneBox[], elev: number,
     }
     mesh.position.set(box.cx, box.cy + elev, box.cz)
     mesh.rotation.y = -THREE.MathUtils.degToRad(box.rotDeg)
+    if (box.kind === 'door' && interactive) {
+      // 경첩은 문짝 왼쪽 끝(벽 방향 -u 쪽). 문짝은 경첩에서 +u 방향으로 w/2만큼 떨어져 있다
+      const a = THREE.MathUtils.degToRad(box.rotDeg), ux = Math.cos(a), uz = Math.sin(a)
+      const pivot = new THREE.Group()
+      pivot.position.set(box.cx - ux * (box.w / 2), box.cy + elev, box.cz - uz * (box.w / 2))
+      pivot.rotation.y = -a
+      mesh.position.set(box.w / 2, 0, 0)
+      mesh.rotation.y = 0
+      mesh.userData.ref = { kind: 'opening', id: box.id.split(':')[0] } satisfies Ref
+      pivot.add(mesh)
+      target.add(pivot)
+      doorLeaves.push({ pivot, cx: box.cx, cz: box.cz, nx: -Math.sin(a), nz: Math.cos(a), base: -a, open: 0, swing: 1 })
+      continue
+    }
     if (box.kind === 'floor') mesh.userData.ref = { kind: 'floor', id: 'floor' } satisfies Ref
     else if (box.kind === 'door' || box.kind === 'glass') mesh.userData.ref = { kind: 'opening', id: box.id.split(':')[0] } satisfies Ref
     else {
@@ -305,6 +324,7 @@ function rebuild() {
   furnGroups.clear()
   wallFades = []
   wallSolids = []
+  doorLeaves = []
   if (stack) {
     project.floors.forEach((f) => addBoxes(world, f.plan, buildBoxesV2(f.plan), PR.floorElevation(project, f.id), false))
     const all = project.floors.map((f) => P.planBounds(f.plan))
@@ -896,6 +916,20 @@ function walkStep(dt: number) {
   const p = persp.position
   if (!blocked(p.x + dx, p.z)) p.x += dx
   if (!blocked(p.x, p.z + dz)) p.z += dz
+}
+
+// 걷기 모드: 문에서 1.3m 안이면 열고, 멀어지면 닫는다. 내가 있는 반대쪽으로 열린다. 다른 보기에서는 닫혀 있다
+function updateDoors(dt: number) {
+  const p = persp.position
+  for (const d of doorLeaves) {
+    const near = view === 'walk' && Math.hypot(p.x - d.cx, p.z - d.cz) < DOOR_OPEN_DIST
+    if (near && d.open < 0.02) d.swing = (p.x - d.cx) * d.nx + (p.z - d.cz) * d.nz >= 0 ? 1 : -1 // 열리기 시작할 때 방향을 정한다
+    const target = near ? 1 : 0
+    const step = view === 'walk' ? dt * 2.2 : 1 // 걷기가 아니면 바로 닫는다
+    d.open += Math.max(-step, Math.min(step, target - d.open))
+    const eased = d.open * d.open * (3 - 2 * d.open) // 부드럽게 시작하고 멈춘다
+    d.pivot.rotation.y = d.base + d.swing * eased * DOOR_OPEN_ANGLE
+  }
 }
 
 /* ───── 패널 ───── */
@@ -1744,7 +1778,8 @@ function frame() {
     }
   } else {
     if (view === 'walk') walkStep(dt)
-    else if (view === '3d') {
+    updateDoors(dt)
+    if (view === '3d') {
       orbit3d.update()
       camera.getWorldPosition(tmp)
       for (const f of wallFades) {
@@ -1806,4 +1841,4 @@ function camScreen(id: string) {
   })
   return out
 }
-;(window as unknown as { __room: unknown }).__room = { get project() { return project }, get plan() { return plan }, get sel() { return sel }, get view() { return view }, openExport, select, lookThrough, camScreen }
+;(window as unknown as { __room: unknown }).__room = { get project() { return project }, get plan() { return plan }, get sel() { return sel }, get view() { return view }, openExport, select, lookThrough, camScreen, doors: () => doorLeaves.map((d) => ({ x: Math.round(d.cx), y: Math.round(d.cz), open: Math.round(d.open * 100) / 100 })) }
