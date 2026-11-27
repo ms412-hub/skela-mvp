@@ -876,7 +876,7 @@ function setTool(t: Tool) {
   viewEl.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === t)))
 }
 function renderHint() {
-  if (view === 'walk') { hintEl.textContent = coarse ? '화면을 끌어 둘러보고, ▲▼ 앞뒤 · ◀▶ 옆으로 걸어요.' : 'W S·↑↓ 앞뒤 · A D·←→ 옆으로 · Q E 고개 돌리기 · 끌어서 둘러보기 · Shift 빨리'; return }
+  if (view === 'walk') { hintEl.textContent = coarse ? '화면을 끌어 둘러보고, ▲▼ 앞뒤 · ◀▶ 옆으로 걸어요.' : 'W A S D 걷기 · 방향키 둘러보기(←→ 좌우, ↑↓ 위아래) · 끌어서 둘러보기 · Shift 빨리'; return }
   if (view === 'cam' && !PILOT_ENABLED) { hintEl.textContent = '카메라 시점이에요. 밝은 틀 안이 내보내기에 찍혀요. 위의 3D를 누르면 편집으로 돌아가요.'; return }
   if (view === 'cam') { hintEl.textContent = coarse ? '끌어서 둘러보고 화살표로 움직여요. −/+ 로 확대, 동그란 버튼으로 찰칵.' : '끌어서 둘러보고 W A S D로 이동, Q·E 높이, 휠로 확대. Space나 동그란 버튼으로 찰칵.'; return }
   if (stack) { hintEl.textContent = '모든 층을 쌓아서 보는 중이에요(보기 전용). 층 탭을 누르면 그 층 편집으로 돌아가요.'; return }
@@ -901,13 +901,15 @@ for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) padEl.addEventL
 })
 function walkStep(dt: number) {
   let f = 0, s = 0
-  if (keys.has('w') || keys.has('arrowup') || padHeld.has('f')) f += 1
-  if (keys.has('s') || keys.has('arrowdown') || padHeld.has('b')) f -= 1
-  // 옆걸음: A·D 또는 ← →. 고개 돌리기: Q·E (마우스·손가락으로 끌어도 된다)
-  if (keys.has('d') || keys.has('arrowright') || padHeld.has('r')) s += 1
-  if (keys.has('a') || keys.has('arrowleft') || padHeld.has('l')) s -= 1
-  if (keys.has('q')) yaw += dt * 1.8
-  if (keys.has('e')) yaw -= dt * 1.8
+  // 이동은 W A S D(와 화면 버튼)만. 방향키는 시점: ← → 고개 돌리기, ↑ ↓ 위아래 보기. Q·E도 고개 돌리기
+  if (keys.has('w') || padHeld.has('f')) f += 1
+  if (keys.has('s') || padHeld.has('b')) f -= 1
+  if (keys.has('d') || padHeld.has('r')) s += 1
+  if (keys.has('a') || padHeld.has('l')) s -= 1
+  if (keys.has('q') || keys.has('arrowleft')) yaw += dt * 1.8
+  if (keys.has('e') || keys.has('arrowright')) yaw -= dt * 1.8
+  if (keys.has('arrowup')) pitch = Math.min(1.2, pitch + dt * 1.2)
+  if (keys.has('arrowdown')) pitch = Math.max(-1.2, pitch - dt * 1.2)
   applyLook()
   if (!f && !s) return
   // 걷기 속도 초속 2.2m (예전 1.5m는 느렸다). Shift를 누르고 있으면 두 배로 달린다
