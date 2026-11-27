@@ -210,6 +210,11 @@ test('예시 4층 집: 층마다 다르게 꾸며지고, 가구가 벽·복도·
     }
   }
   assert.equal(signatures.size, 4, '네 층의 배치가 모두 다르다')
+  // 2층 드레스룸: 복도 쪽 문은 없고, 안방과 사이 벽에 문이 있다. 다른 층은 그대로
+  const doorsOn = (i: number, wall: string) => pr.floors[i].plan.openings.filter((o) => o.wallId === wall && o.kind === 'door')
+  assert.equal(doorsOn(1, 'wall8').length, 0, '2층 드레스룸 복도 문 없음')
+  assert.equal(doorsOn(1, 'wall13').length, 2, '2층 안방 벽: 입구 + 드레스룸 문')
+  for (const i of [0, 2, 3]) { assert.equal(doorsOn(i, 'wall8').length, 1); assert.equal(doorsOn(i, 'wall13').length, 1) }
   // 식탁은 1층에만
   assert.ok(pr.floors[0].plan.furniture.some((f) => f.type === 'dining'), '1층에는 식탁이 있다')
   for (const fl of pr.floors.slice(1)) assert.ok(!fl.plan.furniture.some((f) => f.type === 'dining'), `${fl.name}에는 식탁이 없다`)

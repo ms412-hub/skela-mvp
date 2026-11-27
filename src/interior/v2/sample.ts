@@ -53,8 +53,8 @@ const FAMILY: Item[] = [
   ['rug', 1150, 720, 0, { w: 140, d: 90 }, '#a7c4a0'],
   // 서재 (방4)
   ['desk', 1580, 35, 180], ['chair', 1580, 92, 180], ['bookshelf', 1420, 300, 270], ['bookshelf', 1740, 300, 90],
-  // 드레스룸 (방5)
-  ['wardrobe', 1433, 640, 270], ['wardrobe', 1433, 760, 270], ['wardrobe', 1727, 640, 90], ['wardrobe', 1727, 760, 90], ['rug', 1580, 840, 0, { w: 120, d: 80 }, '#b9a7c9'],
+  // 드레스룸 (방5): 복도 쪽 문을 막고 안방에서만 들어간다(워크인 클로젯). 막힌 옛 문 자리 벽에 옷장
+  ['wardrobe', 1433, 640, 270], ['wardrobe', 1433, 760, 270], ['wardrobe', 1727, 640, 90], ['wardrobe', 1580, 594], ['rug', 1580, 840, 0, { w: 120, d: 80 }, '#b9a7c9'],
   // 부부 침실 (안방)
   ['bed', 1980, 120, 0, {}, '#6c5b4f'], ['wardrobe', 1793, 150, 270], ['wardrobe', 1793, 270, 270], ['desk', 2165, 450, 270], ['chair', 2110, 450, 270],
   ['rug', 1980, 330, 0, {}, '#a8b5a0'], ['plant', 2170, 650],
@@ -114,8 +114,17 @@ const LEISURE: Item[] = [
   ['wardrobe', 1860, 660], ['plant', 2170, 640], ['plant', 2110, 650], ['plant', 2030, 655], ['plant', 1990, 600],
 ]
 
-export const SAMPLE_FLOORS = [
-  { name: '2F', theme: '가족 층', floorColor: '#b8916a', wallColor: '#efe9df', items: FAMILY },
+// 2층만: 드레스룸(방5)의 복도 쪽 문(wall8)을 없애고, 안방과 사이 벽(wall13)에 문을 낸다 (안방 입구 y=481보다 안쪽 y=820)
+export const DRESSROOM_DOOR_Y = 820
+function walkInCloset(p: Plan): Plan {
+  let q = p
+  for (const o of q.openings.filter((o) => o.wallId === 'wall8')) q = P.removeOpening(q, o.id)
+  const w = q.walls.find((x) => x.id === 'wall13')
+  return w ? P.addOpening(q, 'wall13', (DRESSROOM_DOOR_Y - w.a.y) / (w.b.y - w.a.y), 'door') : q
+}
+
+export const SAMPLE_FLOORS: { name: string; theme: string; floorColor: string; wallColor: string; items: Item[]; edit?: (p: Plan) => Plan }[] = [
+  { name: '2F', theme: '가족 층', floorColor: '#b8916a', wallColor: '#efe9df', items: FAMILY, edit: walkInCloset },
   { name: '3F', theme: '작업·취미 층', floorColor: '#cb9a68', wallColor: '#fbf6ee', items: WORK },
   { name: '4F', theme: '휴식·게스트 층', floorColor: '#c7b08c', wallColor: '#f3efe6', items: LEISURE },
 ]
@@ -129,7 +138,7 @@ export function sampleProject(): PR.Project {
   for (const f of SAMPLE_FLOORS) {
     pr = PR.addFloor(PR.selectFloor(pr, pr.floors[pr.floors.length - 1].id))
     const fl = pr.floors[pr.floors.length - 1]
-    pr = PR.setFloorPlan(pr, fl.id, furnish(p1, f.name, f.floorColor, f.wallColor, f.items))
+    pr = PR.setFloorPlan(pr, fl.id, furnish(f.edit ? f.edit(p1) : p1, f.name, f.floorColor, f.wallColor, f.items))
     pr = PR.renameFloor(pr, fl.id, f.name)
   }
   const room = P.planBounds(p1)
