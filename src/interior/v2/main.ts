@@ -144,6 +144,7 @@ root.innerHTML = `
       <button class="zoom" data-zoom="1" aria-label="가깝게 (확대)" title="가깝게">+</button>
     </div>
     <div class="rs-flash" id="rs-flash" hidden></div>
+    <div class="rs-fade" id="rs-fade"></div>
     <div class="rs-shotchip" id="rs-shotchip" hidden><img alt="방금 찍은 사진" id="rs-shotimg" /><span id="rs-shotname"></span><button class="rs-btn primary" id="rs-shotsave">다시 저장</button></div>
     <div class="rs-preview" id="rs-preview" hidden><span id="rs-preview-name"></span></div>
     <div class="rs-frame" id="rs-frame" hidden><span id="rs-frame-name"></span></div>
@@ -154,7 +155,7 @@ root.innerHTML = `
 </div>`
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const viewEl = $('rs-view'), hintEl = $('rs-hint'), measureEl = $('rs-measure'), padEl = $('rs-pad')
-const previewEl = $('rs-preview'), frameEl = $('rs-frame')
+const previewEl = $('rs-preview'), frameEl = $('rs-frame'), fadeEl = $('rs-fade')
 
 let toastTimer = 0
 function toast(msg: string) {
@@ -503,6 +504,7 @@ function setView(v: View) {
     if (tool !== 'select') setTool('select')
     const start = walkStart(plan)
     persp.position.set(start.x, EYE, start.y)
+    floorH = 0
     yaw = Math.atan2(-(start.lookX - start.x), -(start.lookY - start.y))
     pitch = -0.08
     applyLook()
@@ -876,7 +878,7 @@ function setTool(t: Tool) {
   viewEl.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === t)))
 }
 function renderHint() {
-  if (view === 'walk') { hintEl.textContent = coarse ? '화면을 끌어 둘러보고, ▲▼ 앞뒤 · ◀▶ 옆으로 걸어요.' : 'W A S D 걷기 · 방향키 둘러보기(←→ 좌우, ↑↓ 위아래) · 끌어서 둘러보기 · Shift 빨리'; return }
+  if (view === 'walk') { hintEl.textContent = coarse ? '화면을 끌어 둘러보고, ▲▼ 앞뒤 · ◀▶ 옆으로 걸어요. 계단을 오르면 위층.' : 'W A S D 걷기 · 방향키 둘러보기 · Shift 빨리 · 계단을 오르면 위층, 아래층은 위 층 버튼'; return }
   if (view === 'cam' && !PILOT_ENABLED) { hintEl.textContent = '카메라 시점이에요. 밝은 틀 안이 내보내기에 찍혀요. 위의 3D를 누르면 편집으로 돌아가요.'; return }
   if (view === 'cam') { hintEl.textContent = coarse ? '끌어서 둘러보고 화살표로 움직여요. −/+ 로 확대, 동그란 버튼으로 찰칵.' : '끌어서 둘러보고 W A S D로 이동, Q·E 높이, 휠로 확대. Space나 동그란 버튼으로 찰칵.'; return }
   if (stack) { hintEl.textContent = '모든 층을 쌓아서 보는 중이에요(보기 전용). 층 탭을 누르면 그 층 편집으로 돌아가요.'; return }
@@ -913,11 +915,57 @@ function walkStep(dt: number) {
   applyLook()
   if (!f && !s) return
   // 걷기 속도 초속 2.2m (예전 1.5m는 느렸다). Shift를 누르고 있으면 두 배로 달린다
-  const speed = WALK_SPEED * (keys.has('shift') ? 2 : 1) * dt, fx = -Math.sin(yaw), fz = -Math.cos(yaw)
+  const speed = WALK_SPEED * (keys.has('shift') ? 2 : 1) * (floorH > 0 ? 0.55 : 1) * dt, fx = -Math.sin(yaw), fz = -Math.cos(yaw)
   const dx = (fx * f - fz * s) * speed, dz = (fz * f + fx * s) * speed
   const p = persp.position
-  if (!blocked(p.x + dx, p.z)) p.x += dx
-  if (!blocked(p.x, p.z + dz)) p.z += dz
+  if (!blocked(p.x + dx, p.z) && canStep(p.x + dx, p.z)) p.x += dx
+  if (!blocked(p.x, p.z + dz) && canStep(p.x, p.z + dz)) p.z += dz
+}
+
+// 계단 오르기: 계단 위에 서면 올라간 만큼 눈높이가 오르고, 약 5단(95cm)을 오르면 화면이 어두워지며 다음 층 계단 앞으로 간다.
+// 계단은 바닥을 뚫지 않는 표시용이라 끝까지 오르면 벽 위로 머리가 나오므로 중간에서 넘어간다.
+let floorH = 0, arriveFade = 0
+const STAIR_SWITCH = 95
+const stairOf = (pl: typeof plan) => pl.furniture.find((f) => f.type === 'stairs')
+function groundAt(x: number, z: number): number {
+  for (const f of plan.furniture) {
+    if (f.type !== 'stairs') continue
+    const a = THREE.MathUtils.degToRad(f.rot), c = Math.cos(a), sn = Math.sin(a), dx = x - f.x, dy = z - f.y
+    const lx = c * dx + sn * dy, lz = -sn * dx + c * dy // 계단 기준: 앞(+z)이 낮고 뒤(-z)가 높다
+    if (Math.abs(lx) < 48 && Math.abs(lz) < 133) return Math.max(0, Math.min(1, (130 - lz) / 260)) * 250
+  }
+  return 0
+}
+const nextFloorId = () => project.floors[project.floors.findIndex((f) => f.id === project.currentFloorId) + 1]?.id
+// 옆에서 계단 중간으로 뛰어오르기 막기, 맨 위층에서는 넘어갈 높이 앞에서 멈춘다
+function canStep(x: number, z: number) {
+  const g = groundAt(x, z)
+  if (g - floorH > 30) return false
+  if (g >= STAIR_SWITCH && !nextFloorId()) return false
+  return true
+}
+// 이 층 계단 바로 앞(70cm)에 계단을 등지고 선다. 계단이 없으면 현관에서 시작
+function placeAtStairs() {
+  const f = stairOf(plan)
+  floorH = 0
+  if (f) {
+    const a = THREE.MathUtils.degToRad(f.rot), c = Math.cos(a), sn = Math.sin(a), lz = 133 + 70
+    const x = f.x - sn * lz, z = f.y + c * lz
+    if (!blocked(x, z)) { persp.position.set(x, EYE, z); yaw = Math.atan2(sn, -c); pitch = -0.08; applyLook(); return }
+  }
+  const start = walkStart(plan)
+  persp.position.set(start.x, EYE, start.y)
+  yaw = Math.atan2(-(start.lookX - start.x), -(start.lookY - start.y)); pitch = -0.08; applyLook()
+}
+function stairStep(dt: number) {
+  const p = persp.position
+  floorH = groundAt(p.x, p.z)
+  p.y += (EYE + floorH - p.y) * Math.min(1, dt * 12)
+  const next = nextFloorId()
+  if (next && floorH >= STAIR_SWITCH) { switchFloor(next); placeAtStairs(); arriveFade = 1 }
+  arriveFade = Math.max(0, arriveFade - dt * 2.2)
+  const climb = next ? Math.max(0, Math.min(1, (floorH - 35) / (STAIR_SWITCH - 35))) : 0
+  fadeEl.style.opacity = String(Math.max(climb, arriveFade) * 0.9)
 }
 
 // 걷기 모드: 문에서 1.3m 안이면 열고, 멀어지면 닫는다. 내가 있는 반대쪽으로 열린다. 다른 보기에서는 닫혀 있다
@@ -1272,7 +1320,7 @@ root.addEventListener('click', (e) => {
   else if (d.gizmo) { const m = d.gizmo as 'translate' | 'rotate'; gizmoOn = !(gizmoOn && gizmoMode === m); gizmoMode = m; attachGizmo(); renderPanels() }
   else if (d.add) addFurniture(d.add)
   else if (d.newcam) newCamera(d.newcam as Preset | 'current')
-  else if (d.floor) { const wasStack = stack; stack = false; if (view === 'cam') setView('3d'); if (d.floor !== project.currentFloorId || wasStack) switchFloor(d.floor) }
+  else if (d.floor) { const wasStack = stack; stack = false; if (view === 'cam') setView('3d'); if (d.floor !== project.currentFloorId || wasStack) switchFloor(d.floor); if (view === 'walk') placeAtStairs() }
   else if (d.floorup) commitProject(PR.moveFloor(project, d.floorup, 1))
   else if (d.floordown) commitProject(PR.moveFloor(project, d.floordown, -1))
   else if (d.floordup) { commitProject(PR.duplicateFloor(project, d.floordup)); select(null) }
@@ -1779,7 +1827,7 @@ function frame() {
       helpers.visible = true; gizmoHelper.visible = gv
     }
   } else {
-    if (view === 'walk') walkStep(dt)
+    if (view === 'walk') { walkStep(dt); stairStep(dt) } else fadeEl.style.opacity = '0'
     updateDoors(dt)
     if (view === '3d') {
       orbit3d.update()
@@ -1843,4 +1891,5 @@ function camScreen(id: string) {
   })
   return out
 }
-;(window as unknown as { __room: unknown }).__room = { get project() { return project }, get plan() { return plan }, get sel() { return sel }, get view() { return view }, openExport, select, lookThrough, camScreen, doors: () => doorLeaves.map((d) => ({ x: Math.round(d.cx), y: Math.round(d.cz), open: Math.round(d.open * 100) / 100 })) }
+;(window as unknown as { __room: unknown }).__room = { get project() { return project }, get plan() { return plan }, get sel() { return sel }, get view() { return view }, openExport, select, lookThrough, camScreen, walkPos: () => ({ x: Math.round(persp.position.x), y: Math.round(persp.position.z), eye: Math.round(persp.position.y), ground: Math.round(floorH) }),
+  doors: () => doorLeaves.map((d) => ({ x: Math.round(d.cx), y: Math.round(d.cz), open: Math.round(d.open * 100) / 100 })) }
