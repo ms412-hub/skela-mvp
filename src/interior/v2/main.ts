@@ -32,7 +32,7 @@ type View = 'plan' | '3d' | 'walk' | 'cam'
 // 예시 집을 바꾸면 r 번호를 올려 새 예시로 열리게 한다. 예전 칸(OLD_STORE_KEYS)의 작업은 지우지 않고 '예전 작업 불러오기'로 연다
 const STORE_KEY = 'skela-room-v2-project-r13'
 const OLD_STORE_KEYS = ['skela-room-v2-project-r12', 'skela-room-v2-project-r11', 'skela-room-v2-project-r10', 'skela-room-v2-project-r9', 'skela-room-v2-project-r8', 'skela-room-v2-project-r7', 'skela-room-v2-project-r6', 'skela-room-v2-project-r5', 'skela-room-v2-project-r4', 'skela-room-v2-project-r3', 'skela-room-v2-project-r2', 'skela-room-v2-project'] // 최근 것부터
-const GRID = 10, MOVE_SNAP = 5, EYE = 160
+const GRID = 10, MOVE_SNAP = 5, EYE = 160, WALK_SPEED = 220 // cm/초
 const coarse = matchMedia('(pointer: coarse)').matches
 // 카메라 기능(가상 카메라·미리보기·직접 조종·찰칵)을 잠시 꺼 둔다. 코드와 저장된 카메라 데이터는 그대로 두고 화면에서만 뺀다. true로 바꾸면 다시 켜진다
 const CAMERA_ENABLED = true
@@ -856,7 +856,7 @@ function setTool(t: Tool) {
   viewEl.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === t)))
 }
 function renderHint() {
-  if (view === 'walk') { hintEl.textContent = '화면을 끌어 둘러보고, W A S D 키나 화살표 버튼으로 걸어요.'; return }
+  if (view === 'walk') { hintEl.textContent = '화면을 끌어 둘러보고, W A S D 키나 화살표 버튼으로 걸어요. Shift를 누르면 빨리 걸어요.'; return }
   if (view === 'cam' && !PILOT_ENABLED) { hintEl.textContent = '카메라 시점이에요. 밝은 틀 안이 내보내기에 찍혀요. 위의 3D를 누르면 편집으로 돌아가요.'; return }
   if (view === 'cam') { hintEl.textContent = coarse ? '끌어서 둘러보고 화살표로 움직여요. −/+ 로 확대, 동그란 버튼으로 찰칵.' : '끌어서 둘러보고 W A S D로 이동, Q·E 높이, 휠로 확대. Space나 동그란 버튼으로 찰칵.'; return }
   if (stack) { hintEl.textContent = '모든 층을 쌓아서 보는 중이에요(보기 전용). 층 탭을 누르면 그 층 편집으로 돌아가요.'; return }
@@ -889,7 +889,8 @@ function walkStep(dt: number) {
   if (keys.has('arrowright')) yaw -= dt * 1.8
   applyLook()
   if (!f && !s) return
-  const speed = 150 * dt, fx = -Math.sin(yaw), fz = -Math.cos(yaw)
+  // 걷기 속도 초속 2.2m (예전 1.5m는 느렸다). Shift를 누르고 있으면 두 배로 달린다
+  const speed = WALK_SPEED * (keys.has('shift') ? 2 : 1) * dt, fx = -Math.sin(yaw), fz = -Math.cos(yaw)
   const dx = (fx * f - fz * s) * speed, dz = (fz * f + fx * s) * speed
   const p = persp.position
   if (!blocked(p.x + dx, p.z)) p.x += dx
@@ -1282,7 +1283,7 @@ window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); redo(); return }
   if (view === 'walk') {
     if (k === ' ' && SHUTTER_ENABLED) { e.preventDefault(); shoot(); return }
-    if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { keys.add(k); e.preventDefault() }
+    if (['w', 'a', 's', 'd', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { keys.add(k); e.preventDefault() }
     if (k === 'escape') setView('3d')
     return
   }
@@ -1722,7 +1723,8 @@ function setCutawayFor(c: VCamera | null) {
   }
 }
 function frame() {
-  const dt = Math.min(clock.getDelta(), 0.05)
+  // 화면이 느린 기기(초당 10장)에서도 제 속도로 걷도록 한 번에 0.1초까지 반영 (한 걸음 22cm < 벽 충돌 두께 54cm라 벽을 뚫지 않는다)
+  const dt = Math.min(clock.getDelta(), 0.1)
   const W = viewEl.clientWidth, H = viewEl.clientHeight
   renderer.setScissorTest(false)
   renderer.setViewport(0, 0, W, H)
