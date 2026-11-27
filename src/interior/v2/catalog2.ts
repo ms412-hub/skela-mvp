@@ -16,7 +16,7 @@ const CATEGORY: Record<string, Category> = {
   pendant: 'lighting',
   rug: 'decor', plant: 'decor',
   tile: 'architecture', floortile: 'architecture', stairs: 'architecture',
-  rack: 'furniture', vanity: 'furniture', dresser: 'furniture', ottoman: 'furniture', mirror: 'decor',
+  washer: 'appliance', dryer: 'appliance', rack: 'furniture', vanity: 'furniture', dresser: 'furniture', ottoman: 'furniture', mirror: 'decor',
 }
 
 // 계단: 위치 표시용 (층을 뚫지 않는다). 13단, 벽 높이 250cm에 맞춘다. 앞(+z)에서 올라가 뒤(-z)가 가장 높다.
@@ -66,6 +66,15 @@ export const DRESSING: FurnitureType[] = [
   ] },
 ]
 
-export const CATALOG_V2: FurnitureTypeV2[] = [...CATALOG, STAIRS, ...DRESSING].map((t) => ({ ...t, category: CATEGORY[t.id] ?? 'furniture', pack: 'core_free' as const }))
+// 세탁실 가전 (v2 전용): 앞면 +z에 동그란 유리문(네모로 단순화)과 위쪽 조작판
+const laundry = (id: string, name: string, body: string, glass: string): FurnitureType => ({ id, name, w: 60, d: 60, h: 85, color: body, boxes: [
+  { x: 0, z: 0, y: 0, w: 60, d: 60, h: 85 },
+  { x: 0, z: 29, y: 26, w: 38, d: 2, h: 38, color: '#9aa3a8' },
+  { x: 0, z: 29, y: 29, w: 30, d: 2, h: 32, color: glass },
+  { x: 0, z: 28, y: 72, w: 54, d: 4, h: 9, color: '#d6dbde' },
+] })
+export const LAUNDRY: FurnitureType[] = [laundry('washer', '세탁기', '#f4f5f6', '#3c4a55'), laundry('dryer', '건조기', '#eceef0', '#55606a')]
+
+export const CATALOG_V2: FurnitureTypeV2[] = [...CATALOG, STAIRS, ...DRESSING, ...LAUNDRY].map((t) => ({ ...t, category: CATEGORY[t.id] ?? 'furniture', pack: 'core_free' as const }))
 export const MAX_TYPES = 100
 export const furnitureTypeV2 = (id: string) => CATALOG_V2.find((t) => t.id === id)

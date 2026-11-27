@@ -12,8 +12,8 @@ import { outputSize, tiles, fileName, alphaBounds, mtlText, asciiName, toAssetMe
 
 const plan64 = () => TEMPLATES.find((t) => t.id === 'corridor64')!.build()
 
-test('v2 목록: 기존 23종 + 계단 + 드레스룸 5종, 모두 분류·팩이 있고 100종 이하', () => {
-  assert.equal(CATALOG_V2.length, 29)
+test('v2 목록: 기존 23종 + 계단 + 드레스룸 5종 + 세탁 2종, 모두 분류·팩이 있고 100종 이하', () => {
+  assert.equal(CATALOG_V2.length, 31)
   assert.ok(CATALOG_V2.length <= MAX_TYPES)
   for (const t of CATALOG_V2) { assert.ok(t.category); assert.equal(t.pack, 'core_free') }
   assert.equal(CATALOG_V2.find((t) => t.id === 'stairs')!.category, 'architecture')
@@ -215,15 +215,19 @@ test('예시 4층 집: 층마다 다르게 꾸며지고, 가구가 벽·복도·
   assert.equal(doorsOn(1, 'wall8').length, 0, '2층 드레스룸 복도 문 없음')
   assert.equal(doorsOn(1, 'wall13').length, 2, '2층 안방 벽: 입구 + 드레스룸 문')
   for (const i of [0, 2, 3]) { assert.equal(doorsOn(i, 'wall8').length, 1); assert.equal(doorsOn(i, 'wall13').length, 1) }
+  // 싱크대(주방 조리대)는 층마다 한 곳까지 (4층 세탁실은 세탁기·건조기)
+  for (const fl of pr.floors) assert.ok(fl.plan.furniture.filter((f) => f.type === 'counter').length <= 2 && new Set(fl.plan.furniture.filter((f) => f.type === 'counter').map((f) => f.y > 561 && f.x < 1400 ? 'kitchen' : 'other')).size <= 1, `${fl.name} 싱크대가 여러 곳`)
+  assert.ok(pr.floors[3].plan.furniture.some((f) => f.type === 'washer') && pr.floors[3].plan.furniture.some((f) => f.type === 'dryer'), '4층 세탁실에 세탁기·건조기')
   // 식탁은 1층에만
   assert.ok(pr.floors[0].plan.furniture.some((f) => f.type === 'dining'), '1층에는 식탁이 있다')
   for (const fl of pr.floors.slice(1)) assert.ok(!fl.plan.furniture.some((f) => f.type === 'dining'), `${fl.name}에는 식탁이 없다`)
   assert.notEqual(pr.floors[1].plan.floorColor, pr.floors[2].plan.floorColor)
 })
 
-test('드레스룸 가구 5종: 정의 크기 안에 있고, 그리는 크기에서 같은 평면에 겹치는 면이 없다', async () => {
-  const { DRESSING } = await import('../src/interior/v2/catalog2.ts')
-  assert.equal(DRESSING.length, 5)
+test('드레스룸 5종·세탁 2종: 정의 크기 안에 있고, 그리는 크기에서 같은 평면에 겹치는 면이 없다', async () => {
+  const { DRESSING: D, LAUNDRY } = await import('../src/interior/v2/catalog2.ts')
+  assert.equal(D.length, 5)
+  const DRESSING = [...D, ...LAUNDRY]
   const ov = (a0: number, a1: number, b0: number, b1: number) => Math.min(a1, b1) - Math.max(a0, b0) > 1e-6
   for (const t of DRESSING) {
     for (const b of t.boxes) assert.ok(Math.abs(b.x) + b.w / 2 <= t.w / 2 + 1e-9 && Math.abs(b.z) + b.d / 2 <= t.d / 2 + 1e-9 && b.y >= 0 && b.y + b.h <= t.h + 1e-9, `${t.name} 상자가 크기 밖`)
