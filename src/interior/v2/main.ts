@@ -856,7 +856,7 @@ function setTool(t: Tool) {
   viewEl.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === t)))
 }
 function renderHint() {
-  if (view === 'walk') { hintEl.textContent = '화면을 끌어 둘러보고, W A S D 키나 화살표 버튼으로 걸어요. Shift를 누르면 빨리 걸어요.'; return }
+  if (view === 'walk') { hintEl.textContent = coarse ? '화면을 끌어 둘러보고, ▲▼ 앞뒤 · ◀▶ 옆으로 걸어요.' : 'W S·↑↓ 앞뒤 · A D·←→ 옆으로 · Q E 고개 돌리기 · 끌어서 둘러보기 · Shift 빨리'; return }
   if (view === 'cam' && !PILOT_ENABLED) { hintEl.textContent = '카메라 시점이에요. 밝은 틀 안이 내보내기에 찍혀요. 위의 3D를 누르면 편집으로 돌아가요.'; return }
   if (view === 'cam') { hintEl.textContent = coarse ? '끌어서 둘러보고 화살표로 움직여요. −/+ 로 확대, 동그란 버튼으로 찰칵.' : '끌어서 둘러보고 W A S D로 이동, Q·E 높이, 휠로 확대. Space나 동그란 버튼으로 찰칵.'; return }
   if (stack) { hintEl.textContent = '모든 층을 쌓아서 보는 중이에요(보기 전용). 층 탭을 누르면 그 층 편집으로 돌아가요.'; return }
@@ -883,10 +883,11 @@ function walkStep(dt: number) {
   let f = 0, s = 0
   if (keys.has('w') || keys.has('arrowup') || padHeld.has('f')) f += 1
   if (keys.has('s') || keys.has('arrowdown') || padHeld.has('b')) f -= 1
-  if (keys.has('d') || padHeld.has('r')) s += 1
-  if (keys.has('a') || padHeld.has('l')) s -= 1
-  if (keys.has('arrowleft')) yaw += dt * 1.8
-  if (keys.has('arrowright')) yaw -= dt * 1.8
+  // 옆걸음: A·D 또는 ← →. 고개 돌리기: Q·E (마우스·손가락으로 끌어도 된다)
+  if (keys.has('d') || keys.has('arrowright') || padHeld.has('r')) s += 1
+  if (keys.has('a') || keys.has('arrowleft') || padHeld.has('l')) s -= 1
+  if (keys.has('q')) yaw += dt * 1.8
+  if (keys.has('e')) yaw -= dt * 1.8
   applyLook()
   if (!f && !s) return
   // 걷기 속도 초속 2.2m (예전 1.5m는 느렸다). Shift를 누르고 있으면 두 배로 달린다
@@ -1283,7 +1284,7 @@ window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); redo(); return }
   if (view === 'walk') {
     if (k === ' ' && SHUTTER_ENABLED) { e.preventDefault(); shoot(); return }
-    if (['w', 'a', 's', 'd', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { keys.add(k); e.preventDefault() }
+    if (['w', 'a', 's', 'd', 'q', 'e', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { keys.add(k); e.preventDefault() }
     if (k === 'escape') setView('3d')
     return
   }
